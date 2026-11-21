@@ -157,6 +157,22 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           (exit 2). The transcript .e2e-artifacts/container-ghostty/
                           ghostty-transcript.log ends with TRACER_LANDING_TEARDOWN_OK after
                           removing the container and the image only when this run pulled it.
+  herdr-app [--keep-image]
+                          Orchestrator only: a disposable, never privileged Fedora container named
+                          tools-installer-e2e-herdr-app-<pid>, with libxcb and libxkbcommon installed
+                          in the box, never on the host. Bootstrapped like audit-landing, the installer
+                          installs the Herdr desktop app and herdr multiplexer in both orders, compares
+                          their binaries, paths and ~/.config/herdr and ~/.config/herdr-app byte for
+                          byte with the other tool present, checks seeded keys.json and removes the app.
+                          Nested herdr-core and hc are allowed by exact path only
+                          (tests/e2e_herdr_app_driver.py). Needs the network. Prints
+                          TRACER_HERDR_APP_INSTALL_OK, _KEYS_OK, _ISOLATION_OK and _REVERSE_OK
+                          per order and _REMOVE_OK for herdr-first, or _FAILED or _UNPROVEN;
+                          isolation and reverse verdicts name their point.
+                          TRACER_LANDING_INFEASIBLE step=... indicates an environment failure (exit 2).
+                          The transcript .e2e-artifacts/container-herdr-app/herdr-app-transcript.log
+                          ends with TRACER_LANDING_TEARDOWN_OK after removing the container and
+                          the image only when this run pulled it.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -311,6 +327,58 @@ resync_workspace() {
   stream_worktree
 }
 
+# make e2e excludes herdr-app: its dedicated target proves it, while herdr-core and hc
+# remain by design; the shared residue allowlist must not hide them. Landing targets retain it
+# (cmd_ghostty, cmd_herdr_keys, cmd_bun_lifecycle); the app also needs network and X libraries.
+GENERIC_SKIP_TOOLS=herdr-app
+# shellcheck disable=SC2016 # awk expands its own field references
+GENERIC_SKIP_AWK='
+BEGIN {
+  count = split(skip, ids, ",")
+  for (i = 1; i <= count; i++) if (ids[i] != "") drop[ids[i]] = 1
+  started = 0; n = 0; skipthis = 0
+}
+$0 == "[[tool]]" {
+  k = 0
+  while (k < n && substr(buf[n-k], 1, 1) == "#") k++
+  if (!started || !skipthis) for (i = 1; i <= n-k; i++) print buf[i]
+  for (i = 1; i <= k; i++) buf[i] = buf[n-k+i]
+  n = k
+  buf[++n] = $0
+  started = 1; skipthis = 0; seen_id = 0
+  next
+}
+{
+  buf[++n] = $0
+  if (started && !seen_id && /^id = "/) {
+    id = $0
+    sub(/^id = "/, "", id)
+    sub(/".*/, "", id)
+    seen_id = 1
+    if (id in drop) skipthis = 1
+  }
+}
+END {
+  if (!started || !skipthis) for (i = 1; i <= n; i++) print buf[i]
+}
+'
+
+drop_generic_skipped_tools() {
+  [[ -n "$GENERIC_SKIP_TOOLS" ]] || return 0
+  local workspace skip
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  printf -v skip '%q' "$GENERIC_SKIP_TOOLS"
+  if ! printf '%s\n' "$GENERIC_SKIP_AWK" | ct exec -i "$CONTAINER_NAME" su - "$TESTER_USER" -c 'cat > /tmp/tools-installer-generic-skip.awk'; then
+    exec_tester 'rm -f /tmp/tools-installer-generic-skip.awk' || true
+    return 1
+  fi
+  exec_tester "cd ${workspace} || exit 1
+rc=0
+awk -v skip=${skip} -f /tmp/tools-installer-generic-skip.awk installer/registry.toml > installer/registry.toml.skip && mv installer/registry.toml.skip installer/registry.toml || rc=\$?
+rm -f /tmp/tools-installer-generic-skip.awk installer/registry.toml.skip
+exit \"\$rc\""
+}
+
 write_tester_path() {
   # su - is a login shell: Fedora's .bashrc returns immediately when not
   # interactive, so PATH must live in .bash_profile (sourced after .bashrc).
@@ -394,6 +462,7 @@ cmd_bootstrap() {
   create_tester
   install_github_token
   copy_workspace
+  drop_generic_skipped_tools || return 1
   bootstrap_homebrew_and_uv
   sync_workspace
   home_listing >"$PHASE_DIR/home-before.txt"
@@ -404,6 +473,7 @@ cmd_bootstrap() {
 cmd_resync() {
   container_running || die "container $CONTAINER_NAME is not running"
   resync_workspace
+  drop_generic_skipped_tools || return 1
   sync_workspace
   printf 'TRACER_RESYNC_OK\n'
 }
@@ -1998,6 +2068,7 @@ nested_prepare() {
     || return 1
   install_github_token || return 1
   copy_workspace || return 1
+  drop_generic_skipped_tools || return 1
   bootstrap_uv || return 1
   write_tester_path || return 1
   sync_workspace || return 1
@@ -3004,6 +3075,42 @@ cmd_ghostty() {
   return "$failed"
 }
 
+# --- herdr-app target (31-07, NTERM-03): orchestrator only ---
+# A PID-named landing box on shared fedora:latest, modeled on cmd_ghostty,
+# cmd_herdr_keys and cmd_bun_lifecycle, with the herdr-app driver.
+# libxcb and libxkbcommon are installed in the box for the binary, never on the host.
+# The vendor script needs the network; its nested core install leaves herdr-core and hc
+# by design (31 D-17, SPEC R3), allowed by the driver. No host config is written.
+herdr_app_root_setup() {
+  exec_root dnf install -y libxcb libxkbcommon
+}
+
+cmd_herdr_app() {
+  local failed=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-image) LANDING_KEEP_IMAGE=1 ;;
+      *) die "unknown herdr-app option: $1" ;;
+    esac
+    shift
+  done
+  LANDING_CONTAINER_NAME="tools-installer-e2e-herdr-app-$$"
+  CONTAINER_NAME="$LANDING_CONTAINER_NAME"
+  IMAGE="$LANDING_IMAGE"
+  DISTRO=fedora
+  LANDING_DRIVER_MODULE=tests.e2e_herdr_app_driver
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-herdr-app"
+  LANDING_TRANSCRIPT="$PHASE_DIR/herdr-app-transcript.log"
+  trap landing_teardown EXIT
+  ensure_phase_dir
+  : >"$LANDING_TRANSCRIPT"
+  landing_note_image
+  landing_bootstrap
+  landing_stage herdr-app-root herdr_app_root_setup
+  landing_step lifecycle lifecycle || failed=1
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -3038,6 +3145,7 @@ main() {
     bun-lifecycle) cmd_bun_lifecycle "$@" ;;
     herdr-keys) cmd_herdr_keys "$@" ;;
     ghostty) cmd_ghostty "$@" ;;
+    herdr-app) cmd_herdr_app "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;

@@ -4,6 +4,7 @@ Run ``python -m tests.e2e_herdr_app_driver lifecycle``. Checks print verdict lin
 FAILED or UNPROVEN exits 1, invalid arguments or a non-container exits 2.
 """
 
+import datetime
 import hashlib
 import os
 import re
@@ -299,6 +300,47 @@ def transcript_problem(text: str) -> str | None:
 
 def transcript_digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:12]
+
+
+PASS_LINE: Final = re.compile(
+    r"herdr-app-container: PASS \((\d{4}-\d{2}-\d{2}); transcript ([0-9a-f]{12})(?:; ([^)]+))?\)"
+)
+
+
+def gate_problem(summary: str | None, transcript: bytes | None) -> str | None:
+    if summary is None:
+        return "summary is missing"
+    if transcript is None:
+        return "transcript is missing"
+    lines = summary.splitlines()
+    try:
+        start = lines.index("## Orchestrator verification")
+    except ValueError:
+        return "verification section is missing"
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    matches = [(i, line) for i, line in enumerate(lines) if line.startswith("herdr-app-container:")]
+    if len(matches) != 1:
+        return "expected exactly one herdr-app-container line"
+    index, line = matches[0]
+    if not start < index < end:
+        return "herdr-app-container line is outside the verification section"
+    match = PASS_LINE.fullmatch(line)
+    if match is None:
+        return "malformed herdr-app-container line"
+    date, digest, note = match.groups()
+    if note and any(marker in note for marker in ("UNPROVEN", "INFEASIBLE")):
+        return f"verification note contains {note}"
+    try:
+        if datetime.date.fromisoformat(date).isoformat() != date:
+            return "invalid date"
+    except ValueError:
+        return "invalid date"
+    problem = transcript_problem(transcript.decode("utf-8", errors="replace"))
+    if problem:
+        return problem
+    if transcript_digest(transcript) != digest:
+        return "transcript digest does not match"
+    return None
 
 
 def norm_path(path: str) -> str:

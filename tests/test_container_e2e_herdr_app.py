@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import hashlib
+import re
+import shlex
+import shutil
+import subprocess
 import time
+import tomllib
+import uuid
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import Final
 
 import pytest
 
 from installer.herdr_app_keys import HERDR_APP_DEFAULTS_VERSION
+from installer.model import load_tools
 from installer.receipts import ReceiptArtifact
 from installer.terminal_keys import TERMINAL_KEYS, apply_terminal_keys
 from installer.uninstall import SweepResult
@@ -858,3 +867,521 @@ def test_step_oserror_is_reported_and_cleanup_runs() -> None:
         for line in lines
     )
     assert "remove:herdr" in fake.calls and fake.calls[-1] == "clear_seed"
+
+
+_SCRIPT: Final = Path(__file__).resolve().parent.parent / "scripts/container-e2e-verify.sh"
+_CONSTANTS: Final = (
+    "IMAGE_FEDORA",
+    "IMAGE_DEBIAN",
+    "IMAGE_ARCH",
+    "LANDING_IMAGE",
+    "LANDING_CONTAINER_NAME",
+    "LANDING_KEEP_IMAGE",
+    "LANDING_PULLED",
+    "TESTER_USER",
+)
+_CT_STUB: Final = 'ct() { printf "ct %s\\n" "$*" >> "$CALLS"; return 0; }\n'
+_APP_FUNCTIONS: Final = (
+    "die",
+    "select_distro",
+    "cmd_herdr_app",
+    "herdr_app_root_setup",
+    "landing_teardown",
+    "landing_note_image",
+    "start_container",
+    "container_exists",
+    "container_running",
+    "exec_root",
+    "exec_tester",
+    "ensure_phase_dir",
+)
+
+
+def _bash() -> str:
+    found = shutil.which("bash")
+    assert found is not None
+    return found
+
+
+def _text() -> str:
+    return _SCRIPT.read_text(encoding="utf-8")
+
+
+def _constant(name: str) -> str:
+    match = re.search(rf"^{name}=(\S+)\s*$", _text(), re.MULTILINE)
+    assert match is not None, name
+    return match.group(1)
+
+
+def _function(name: str) -> str:
+    match = re.search(rf"^{name}\(\) \{{.*?\n\}}\n", _text(), re.MULTILINE | re.DOTALL)
+    assert match is not None, name
+    return match.group(0)
+
+
+def _script(*names: str, variables: Mapping[str, str] | None = None, stubs: str = "") -> str:
+    parts = ["set -uo pipefail", *(f"{n}={_constant(n)}" for n in _CONSTANTS)]
+    parts.extend(_function(n) for n in names)
+    parts.extend(f"{k}={shlex.quote(v)}" for k, v in (variables or {}).items())
+    return "\n".join([*parts, stubs])
+
+
+def _run(script: str, scratch: Path) -> subprocess.CompletedProcess[str]:
+    scratch.mkdir(parents=True, exist_ok=True)
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(scratch),
+        "CALLS": str(scratch / "calls"),
+        "LANG": "C",
+    }
+    path = scratch.parent / f"harness-{uuid.uuid4().hex}.sh"
+    path.write_text(script, encoding="utf-8")
+    try:
+        return subprocess.run(
+            [_bash(), str(path)], env=env, capture_output=True, text=True, check=False, timeout=30
+        )
+    finally:
+        path.unlink()
+
+
+def _calls(scratch: Path) -> list[str]:
+    path = scratch / "calls"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def _app_run(
+    scratch: Path, distro: str = "fedora", status: int = 0, option: str = ""
+) -> subprocess.CompletedProcess[str]:
+    stubs = (
+        _CT_STUB
+        + f"""\nlanding_bootstrap() {{ start_container replace; exec_root true; }}
+landing_stage() {{ shift; "$@"; }}
+landing_step() {{ exec_tester true; return {status}; }}
+select_distro {distro}
+rc=0; cmd_herdr_app {option} || rc=$?; printf 'RC=%s\\n' "$rc"; exit "$rc"
+"""
+    )
+    return _run(
+        _script(
+            *_APP_FUNCTIONS,
+            variables={"REPO_ROOT": str(scratch / "repo"), "TESTER_HOME": "/home/tester"},
+            stubs=stubs,
+        ),
+        scratch,
+    )
+
+
+def test_the_usage_names_every_verdict_the_driver_expects() -> None:
+    usage = _function("usage").split("herdr-app [--keep-image]", 1)[1].split("-h, --help", 1)[0]
+    for prefixes in driver.EXPECTED_LINES.values():
+        for prefix in prefixes:
+            assert prefix.split("TRACER_HERDR_APP_", 1)[1].split()[0] in usage
+    assert all(x in usage for x in ("exact path", "herdr-core", "hc"))
+
+
+def test_gate_problem_accepts_one_pass_line_and_names_each_defect() -> None:
+    lines = [
+        p + ("0.1.16" if p.endswith("herdr-app ") else "")
+        for prefixes in driver.EXPECTED_LINES.values()
+        for p in prefixes
+    ]
+    transcript = ("\n".join([*lines, "TRACER_LANDING_TEARDOWN_OK"]) + "\n").encode()
+    digest = driver.transcript_digest(transcript)
+    line = f"herdr-app-container: PASS (2026-11-21; transcript {digest})"
+    summary = f"## Orchestrator verification\n{line}\n## Next\n"
+    assert driver.gate_problem(summary, transcript) is None
+    assert (
+        driver.gate_problem(summary.replace(digest + ")", digest + "; a note)"), transcript) is None
+    )
+    cases: list[tuple[str | None, bytes | None, str]] = [
+        (None, transcript, "summary"),
+        (summary, None, "transcript"),
+        (line, transcript, "section"),
+        ("## Orchestrator verification\n", transcript, "line"),
+        (summary.replace(line, line + "\n" + line), transcript, "line"),
+        (f"{line}\n## Orchestrator verification\n", transcript, "section"),
+        (summary.replace("PASS", "FAIL"), transcript, "malformed"),
+        (summary.replace(line, "herdr-app-container: not run"), transcript, "malformed"),
+        *[
+            (summary.replace(digest + ")", digest + f"; {note})"), transcript, note)
+            for note in ("UNPROVEN", "INFEASIBLE")
+        ],
+        *[
+            (summary.replace("2026-11-21", date), transcript, "date")
+            for date in ("2026-02-30", "2026-99-99")
+        ],
+        *[
+            (summary.replace(digest, bad), transcript, "malformed")
+            for bad in (digest[:11], digest + "0", "a" * 13, digest.upper())
+        ],
+        (summary.replace(digest, "0" * 12), transcript, "digest"),
+        (summary, transcript + b"\n", "digest"),
+        (summary, b"X_FAILED\n" + transcript, "FAILED"),
+        (summary, ("\n".join(lines[1:] + ["TRACER_LANDING_TEARDOWN_OK"]) + "\n").encode(), "lacks"),
+    ]
+    for value, data, cause in cases:
+        problem = driver.gate_problem(value, data)
+        assert problem is not None and cause in problem, (cause, problem)
+
+
+def test_herdr_app_is_registered() -> None:
+    assert re.search(r'^\s*herdr-app\) cmd_herdr_app "\$@" ;;$', _text(), re.MULTILINE)
+    usage = _function("usage").split("herdr-app [--keep-image]", 1)[1].split("-h, --help", 1)[0]
+    assert all(x in usage for x in ("TRACER_HERDR_APP_", "libxcb", "Needs the network"))
+    body = _function("cmd_herdr_app")
+    for item in (
+        'LANDING_CONTAINER_NAME="tools-installer-e2e-herdr-app-$$"',
+        "LANDING_DRIVER_MODULE=tests.e2e_herdr_app_driver",
+        'PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-herdr-app"',
+        "DISTRO=fedora",
+        'IMAGE="$LANDING_IMAGE"',
+    ):
+        assert item in body
+    assert (
+        body.index("trap landing_teardown EXIT")
+        < body.index("landing_note_image")
+        < body.index("landing_bootstrap")
+        < body.index("landing_stage herdr-app-root herdr_app_root_setup")
+        < body.index("landing_step")
+    )
+
+
+def test_herdr_app_runs_one_lifecycle_step() -> None:
+    assert re.findall(
+        r"^  landing_step (\S+) (\S+) \|\| failed=1$", _function("cmd_herdr_app"), re.MULTILINE
+    ) == [("lifecycle", "lifecycle")]
+    assert driver.accepts(["lifecycle"])
+
+
+def test_herdr_app_root_setup_installs_only_the_two_libraries(tmp_path: Path) -> None:
+    result = _run(
+        _script(
+            "herdr_app_root_setup",
+            "exec_root",
+            variables={"CONTAINER_NAME": "test-container"},
+            stubs=_CT_STUB + "herdr_app_root_setup\n",
+        ),
+        tmp_path,
+    )
+    assert result.returncode == 0
+    assert _calls(tmp_path) == ["ct exec test-container dnf install -y libxcb libxkbcommon"]
+
+
+@pytest.mark.parametrize("distro", ["fedora", "debian", "arch"])
+def test_herdr_app_start_is_never_privileged_and_targets_only_its_own_container(
+    tmp_path: Path, distro: str
+) -> None:
+    result = _app_run(tmp_path, distro)
+    assert result.returncode == 0, result.stderr
+    calls = [c for c in _calls(tmp_path) if c.startswith(("ct run ", "ct exec ", "ct rm "))]
+    names: set[str] = set()
+    for call in calls:
+        match = re.search(r"tools-installer-e2e-herdr-app-\d+", call)
+        assert match and not re.search(r"tools-installer-e2e-(fedora|debian|arch)\b", call)
+        names.add(match.group())
+        assert not any(x in call for x in ("--privileged", "--cap-add", "--device"))
+    assert len(names) == 1
+    assert any(
+        re.search(r"ct run .*--name tools-installer-e2e-herdr-app-\d+ fedora:latest", c)
+        for c in calls
+    )
+
+
+@pytest.mark.parametrize("pulled", ["1", "0"])
+def test_herdr_app_teardown_removes_only_its_container_and_a_pulled_image(
+    tmp_path: Path, pulled: str
+) -> None:
+    result = _run(
+        _script(
+            "landing_teardown",
+            variables={
+                "LANDING_CONTAINER_NAME": "tools-installer-e2e-herdr-app-4242",
+                "LANDING_PULLED": pulled,
+            },
+            stubs=_CT_STUB + "landing_teardown\n",
+        ),
+        tmp_path,
+    )
+    assert result.returncode == 0
+    calls = _calls(tmp_path)
+    assert [c for c in calls if c.startswith("ct rm ")] == [
+        "ct rm -f tools-installer-e2e-herdr-app-4242"
+    ]
+    assert [c for c in calls if c.startswith("ct rmi ")] == (
+        ["ct rmi fedora:latest"] if pulled == "1" else []
+    )
+
+
+@pytest.mark.parametrize("status", [0, 1])
+def test_a_failing_lifecycle_step_returns_one_and_the_teardown_still_runs(
+    tmp_path: Path, status: int
+) -> None:
+    result = _app_run(tmp_path, status=status)
+    assert result.returncode == status and f"RC={status}" in result.stdout
+    assert any(
+        re.fullmatch(r"ct rm -f tools-installer-e2e-herdr-app-\d+", c) for c in _calls(tmp_path)
+    )
+
+
+def test_an_unknown_herdr_app_option_dies(tmp_path: Path) -> None:
+    result = _app_run(tmp_path, option="--bogus")
+    assert result.returncode != 0 and "unknown herdr-app option: --bogus" in result.stderr
+
+
+def test_the_harness_never_prunes_or_resets_for_herdr_app() -> None:
+    assert not re.search(
+        r"system prune|system reset|image prune|volume prune|container prune|builder prune", _text()
+    )
+    block = _text().split("# --- herdr-app target", 1)[1].split("\n}\n", 2)[1]
+    assert "rm -rf" not in block and "sudo" not in block
+
+
+def test_the_herdr_app_target_comment_names_the_shared_image() -> None:
+    block = _text().split("# --- herdr-app target", 1)[1].split("cmd_herdr_app()", 1)[0]
+    assert all(
+        x in block for x in ("fedora:latest", "cmd_ghostty", "cmd_herdr_keys", "cmd_bun_lifecycle")
+    )
+    assert not re.search(r"line\s+\d+", block)
+
+
+_REGISTRY: Final = _SCRIPT.parent.parent / "installer/registry.toml"
+
+
+def _awk_program() -> str:
+    match = re.search(r"^GENERIC_SKIP_AWK='\n(.*?)^'\s*$", _text(), re.MULTILINE | re.DOTALL)
+    assert match is not None
+    return match.group(1)
+
+
+def _blocks(text: str) -> tuple[str, dict[str, str]]:
+    lines = text.splitlines(keepends=True)
+    starts: list[int] = []
+    markers: list[int] = []
+    for i, line in enumerate(lines):
+        if line == "[[tool]]\n":
+            start = i
+            while start and lines[start - 1].startswith("#"):
+                start -= 1
+            starts.append(start)
+            markers.append(i)
+    blocks: dict[str, str] = {}
+    for j, marker in enumerate(markers):
+        match = re.fullmatch(r'id = "([^"]+)"\n', lines[marker + 1])
+        assert match is not None
+        blocks[match.group(1)] = "".join(
+            lines[starts[j] : starts[j + 1] if j + 1 < len(starts) else len(lines)]
+        )
+    return "".join(lines[: starts[0]]), blocks
+
+
+def _filter_registry(tmp_path: Path, skip: str) -> str:
+    program = tmp_path / "filter.awk"
+    program.write_text(_awk_program(), encoding="utf-8")
+    result = _run(
+        f"awk -v {shlex.quote('skip=' + skip)} -f {shlex.quote(str(program))} "
+        f"{shlex.quote(str(_REGISTRY))}\n",
+        tmp_path / "home",
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_the_generic_skip_awk_drops_exactly_the_named_entry_and_its_own_comment(
+    tmp_path: Path,
+) -> None:
+    original = _REGISTRY.read_text(encoding="utf-8")
+    filtered = _filter_registry(tmp_path, "herdr-app")
+    preamble, blocks = _blocks(original)
+    new_preamble, new_blocks = _blocks(filtered)
+    ids = [tool.id for tool in load_tools(_REGISTRY)]
+    result_path = tmp_path / "registry.toml"
+    result_path.write_text(filtered, encoding="utf-8")
+    assert [tool.id for tool in load_tools(result_path)] == [i for i in ids if i != "herdr-app"]
+    assert [row["id"] for row in tomllib.loads(filtered)["tool"]] == [
+        i for i in ids if i != "herdr-app"
+    ]
+    assert new_preamble == preamble
+    assert new_blocks == {k: v for k, v in blocks.items() if k != "herdr-app"}
+    assert filtered == preamble + "".join(v for k, v in blocks.items() if k != "herdr-app")
+    app_comment = blocks["herdr-app"].split("[[tool]]", 1)[0]
+    assert app_comment not in filtered and "releases.herdr.dev/app/install.sh" not in filtered
+    for tool in ("iterm2", "ghostty", "herdr"):
+        comment = blocks[tool].split("[[tool]]", 1)[0]
+        assert comment and comment in filtered
+    assert "# Verified 2026-11-08, re-checked" in new_blocks["herdr"]
+    assert 'id = "herdr-app"' not in filtered
+    assert blocks["herdr-app"].split("[[tool]]", 1)[1] not in filtered
+
+
+def test_the_generic_skip_awk_with_an_empty_list_changes_nothing_and_with_two_ids_drops_both(
+    tmp_path: Path,
+) -> None:
+    original = _REGISTRY.read_text(encoding="utf-8")
+    assert _filter_registry(tmp_path, "") == original
+    assert _filter_registry(tmp_path, "nonexistent") == original
+    preamble, blocks = _blocks(original)
+    assert _filter_registry(tmp_path, "iterm2,herdr-app") == preamble + "".join(
+        block for name, block in blocks.items() if name not in {"iterm2", "herdr-app"}
+    )
+
+
+def test_the_generic_skip_list_is_exactly_herdr_app() -> None:
+    text = _text()
+    assert re.findall(r"^GENERIC_SKIP_TOOLS=.*$", text, re.MULTILINE) == [
+        "GENERIC_SKIP_TOOLS=herdr-app"
+    ]
+    before = text.split("GENERIC_SKIP_TOOLS=herdr-app", 1)[0].splitlines()[-5:]
+    assert all(word in " ".join(before) for word in ("herdr-app", "herdr-core", "target"))
+
+
+def test_the_filter_runs_in_the_generic_commands_only() -> None:
+    for name, before, after in (
+        ("cmd_bootstrap", "  copy_workspace", "  bootstrap_homebrew_and_uv"),
+        ("cmd_resync", "  resync_workspace", "  sync_workspace"),
+        ("nested_prepare", "  copy_workspace || return 1", "  bootstrap_uv || return 1"),
+    ):
+        lines = _function(name).splitlines()
+        call = "  drop_generic_skipped_tools || return 1"
+        assert lines.count(call) == 1
+        assert lines.index(before) < lines.index(call) < lines.index(after)
+    for name in ("landing_bootstrap", "cmd_ghostty", "cmd_herdr_keys", "cmd_herdr_app"):
+        assert "drop_generic_skipped_tools" not in _function(name)
+
+
+_HELPERS: Final = (
+    "exec_root",
+    "install_github_token",
+    "copy_workspace",
+    "drop_generic_skipped_tools",
+    "bootstrap_uv",
+    "write_tester_path",
+    "sync_workspace",
+    "ensure_phase_dir",
+    "start_container",
+    "distro_release_record",
+    "install_root_prereqs",
+    "create_tester",
+    "bootstrap_homebrew_and_uv",
+    "container_running",
+    "resync_workspace",
+)
+
+
+def _stub_helpers(failure: str = "") -> str:
+    return "\n".join(
+        f"{name}() {{ echo {name}; return {int(name == failure)}; }}" for name in _HELPERS
+    )
+
+
+def test_nested_prepare_filters_the_registry_copy_after_the_workspace_copy(tmp_path: Path) -> None:
+    for failed in ("", "copy_workspace"):
+        result = _run(
+            _script(
+                "nested_prepare", stubs="set -e\n" + _stub_helpers(failed) + "\nnested_prepare\n"
+            ),
+            tmp_path / (failed or "ok"),
+        )
+        expected = list(_HELPERS[:7])
+        assert result.stdout.splitlines() == (expected if not failed else expected[:3])
+        assert result.returncode == int(bool(failed))
+
+
+def test_a_failing_filter_stops_the_bootstrap_and_the_sync(tmp_path: Path) -> None:
+    for name, forbidden in (
+        ("nested_prepare", ("bootstrap_uv", "write_tester_path", "sync_workspace")),
+        ("cmd_bootstrap", ("bootstrap_homebrew_and_uv",)),
+        ("cmd_resync", ("sync_workspace", "TRACER_RESYNC_OK")),
+    ):
+        result = _run(
+            _script(
+                name, stubs="set -e\n" + _stub_helpers("drop_generic_skipped_tools") + f"\n{name}\n"
+            ),
+            tmp_path / name,
+        )
+        assert result.returncode != 0
+        assert "drop_generic_skipped_tools" in result.stdout
+        assert all(item not in result.stdout.splitlines() for item in forbidden)
+
+
+def _filter_script(tmp_path: Path, stub: str, skip: str = "herdr-app") -> str:
+    return _script(
+        "drop_generic_skipped_tools",
+        "exec_tester",
+        variables={
+            "GENERIC_SKIP_TOOLS": skip,
+            "GENERIC_SKIP_AWK": _awk_program(),
+            "TESTER_WORKSPACE": str(tmp_path / "workspace"),
+            "CONTAINER_NAME": "test-container",
+            "TESTER_USER": "tester",
+        },
+        stubs=stub + "\ndrop_generic_skipped_tools\n",
+    )
+
+
+def test_the_filter_function_stages_the_program_and_cleans_up(tmp_path: Path) -> None:
+    stub = """ct() {
+  printf 'ct %s\\n' "$*" >> "$CALLS"
+  if [[ "$2" == -i ]]; then cat > "$HOME/stdin"; fi
+}
+"""
+    result = _run(_filter_script(tmp_path, stub), tmp_path)
+    assert result.returncode == 0, result.stderr
+    calls = _calls(tmp_path)
+    assert sum(call.startswith("ct exec ") for call in calls) == 2
+    assert (
+        "ct exec -i test-container su - tester -c cat > /tmp/tools-installer-generic-skip.awk"
+        in calls[0]
+    )
+    command = "\n".join(calls[1:])
+    assert (
+        "awk -v skip=herdr-app -f /tmp/tools-installer-generic-skip.awk installer/registry.toml"
+        in command
+    )
+    assert "mv installer/registry.toml.skip installer/registry.toml" in command
+    assert "rm -f /tmp/tools-installer-generic-skip.awk installer/registry.toml.skip" in command
+    assert (tmp_path / "stdin").read_text() == _awk_program() + "\n"
+    empty = tmp_path / "empty"
+    assert _run(_filter_script(empty, stub, ""), empty).returncode == 0
+    assert _calls(empty) == []
+
+
+def test_the_filter_function_propagates_each_failure_and_still_cleans_up(tmp_path: Path) -> None:
+    for failure in ("stage", "command"):
+        scratch = tmp_path / failure
+        stub = f"""ct() {{
+  printf 'ct %s\\n' "$*" >> "$CALLS"
+  if [[ "$2" == -i ]]; then
+    cat > /dev/null; [[ {failure} != stage ]]
+  else
+    [[ {failure} != command ]]
+  fi
+}}
+"""
+        result = _run(_filter_script(scratch, stub), scratch)
+        assert result.returncode != 0
+        calls = _calls(scratch)
+        assert any("rm -f /tmp/tools-installer-generic-skip.awk" in call for call in calls)
+    for failure in ("awk", "mv"):
+        scratch = tmp_path / failure
+        workspace = scratch / "workspace/installer"
+        workspace.mkdir(parents=True)
+        registry = workspace / "registry.toml"
+        original = _REGISTRY.read_text()
+        registry.write_text(original)
+        stub = rf"""ct() {{
+  if [[ "$2" == -i ]]; then cat > "$HOME/staged"; return; fi
+  local command="${{*: -1}}"
+  command="${{command//\/tmp\/tools-installer-generic-skip.awk/$HOME\/staged}}"
+  {failure}() {{ return 3; }}; export -f {failure}
+  bash -c "$command"
+}}
+"""
+        result = _run(_filter_script(scratch, stub), scratch)
+        assert result.returncode != 0
+        assert not (scratch / "staged").exists()
+        assert not (workspace / "registry.toml.skip").exists()
+        assert registry.read_text() == original
+
+
+def test_the_production_registry_keeps_herdr_app() -> None:
+    assert "herdr-app" in [tool.id for tool in load_tools(_REGISTRY)]
