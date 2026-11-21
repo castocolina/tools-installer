@@ -178,6 +178,11 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           TRACER_AWS_INSTALL_OK, TRACER_AWS_RERUN_OK, TRACER_AWS_REMOVE_OK,
                           TRACER_AWS_NOGPG_OK and TRACER_LANDING_TEARDOWN_OK. Removes its own
                           containers and only images pulled by this run.
+  bruno [--keep-image]    Orchestrator only: PID-named Fedora box with fuse-libs and Electron
+                          libraries, /dev/fuse only when available, never privileged. Prints
+                          TRACER_BRUNO_INSTALL_OK or TRACER_BRUNO_INSTALL_UNPROVEN (engine smoke),
+                          TRACER_BRUNO_RUN_OK or TRACER_BRUNO_RUN_UNPROVEN and TRACER_BRUNO_REMOVE_OK.
+                          An UNPROVEN run is reported, never a pass.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -336,7 +341,8 @@ resync_workspace() {
 # remain by design; the shared residue allowlist must not hide them. Landing targets retain it
 # (cmd_ghostty, cmd_herdr_keys, cmd_bun_lifecycle); the app also needs network and X libraries.
 # aws-cli fails closed without gnupg on Debian; its dedicated target proves both hosts.
-GENERIC_SKIP_TOOLS=herdr-app,aws-cli
+# bruno: 175 MB AppImage, no CLI, Electron needs a display; its target tests lifecycle and modes.
+GENERIC_SKIP_TOOLS=herdr-app,aws-cli,bruno
 # shellcheck disable=SC2016 # awk expands its own field references
 GENERIC_SKIP_AWK='
 BEGIN {
@@ -3214,6 +3220,49 @@ cmd_aws_cli() {
   return "$failed"
 }
 
+# --- bruno target (32-07, ONB-13): orchestrator only ---
+BRUNO_HOST_FUSE=/dev/fuse
+
+bruno_run_args() {
+  CONTAINER_RUN_ARGS=(--security-opt label=disable)
+  if [[ -e "$BRUNO_HOST_FUSE" ]]; then
+    CONTAINER_RUN_ARGS+=(--device /dev/fuse)
+  else
+    printf 'bruno: %s is absent; as-is may report TRACER_BRUNO_RUN_UNPROVEN; extract modes still run\n' "$BRUNO_HOST_FUSE" >&2
+  fi
+}
+
+bruno_root_setup() {
+  exec_root dnf install -y fuse-libs gtk3 nss alsa-lib libXScrnSaver mesa-libgbm libdrm at-spi2-core cups-libs libxkbcommon
+}
+
+cmd_bruno() {
+  local failed=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-image) LANDING_KEEP_IMAGE=1 ;;
+      *) die "unknown bruno option: $1" ;;
+    esac
+    shift
+  done
+  LANDING_CONTAINER_NAME="tools-installer-e2e-bruno-$$"
+  CONTAINER_NAME="$LANDING_CONTAINER_NAME"
+  IMAGE="$LANDING_IMAGE"
+  DISTRO=fedora
+  LANDING_DRIVER_MODULE=tests.e2e_bruno_driver
+  bruno_run_args
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-bruno"
+  LANDING_TRANSCRIPT="$PHASE_DIR/bruno-transcript.log"
+  trap landing_teardown EXIT
+  ensure_phase_dir
+  : >"$LANDING_TRANSCRIPT"
+  landing_note_image
+  landing_bootstrap
+  landing_stage bruno-root bruno_root_setup
+  landing_step lifecycle lifecycle || failed=1
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -3250,6 +3299,7 @@ main() {
     ghostty) cmd_ghostty "$@" ;;
     herdr-app) cmd_herdr_app "$@" ;;
     aws-cli) cmd_aws_cli "$@" ;;
+    bruno) cmd_bruno "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
