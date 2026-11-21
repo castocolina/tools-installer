@@ -639,6 +639,21 @@ def test_table_cells_follow_the_terminal_keys_table() -> None:
     ]
 
 
+def test_ghostty_row_records_what_is_proven() -> None:
+    rows = table_rows(_subsection(_text(SKILL), TABLE_HEADING))
+    row = next(row for row in rows if row[0] == "`ghostty`")
+    assert len(row) == 7
+    assert all(
+        cell.startswith(status)
+        for cell, status in zip(
+            row[2:], ("written", "vendor", "written", "vendor", "unverified"), strict=True
+        )
+    )
+    assert row[2].count("disposable container, 30 D-18") == 1
+    assert row[4].count("disposable container, 30 D-18") == 1
+    assert "macos-option-as-alt is never written" in row[3]
+
+
 def test_table_matches_the_registry() -> None:
     ids = table_ids(table_rows(_subsection(_text(SKILL), TABLE_HEADING)))
     assert ids

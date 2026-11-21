@@ -2369,6 +2369,27 @@ def test_ghostty_entry_records_its_facts() -> None:
     assert comments <= 40
 
 
+def test_ghostty_entry_records_the_container_proof() -> None:
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    index = lines.index('id = "ghostty"')
+    assert lines[index - 1] == "[[tool]]"
+    comments: list[str] = []
+    for line in reversed(lines[: index - 1]):
+        if not line.startswith("#"):
+            break
+        comments.append(line)
+    text = "\n".join(reversed(comments))
+    assert len(comments) <= 40
+    assert re.search(r"# Verified \d{4}-\d{2}-\d{2}: the ghostty container target", text)
+    for phrase in ("extract-and-run", "read both regions back", "removed everything it placed"):
+        assert phrase in text
+    cases = (
+        "once with FUSE and once by extract-and-run",
+        "extract-and-run proven in a container; the FUSE mount is checked on a Bazzite host (UAT)",
+    )
+    assert sum(case in text for case in cases) == 1
+
+
 def test_native_package_manager_rows_declare_their_owner_probes() -> None:
     # D-05: exactly the fifteen rows that can be installed through a native
     # OS package manager (or, for opencode/wezterm, pacman alone) declare
