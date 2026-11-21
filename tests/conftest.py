@@ -28,6 +28,7 @@ import pytest
 from installer import (
     app,
     executors,
+    iterm2_profile,
     locations,
     post_install,
     postinstall,
@@ -35,6 +36,7 @@ from installer import (
     status,
     terminal_keys,
 )
+from installer.run import CommandError
 from tests.home_fingerprint import fingerprint, fingerprint_diff
 from tests.launch_doubles import stub_launch
 from tests.sandbox import (
@@ -128,6 +130,16 @@ def no_wezterm_show_keys(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr(terminal_keys, "wezterm_show_keys", unavailable)
+
+
+@pytest.fixture(autouse=True)
+def no_iterm2_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test runs the real defaults tool."""
+
+    def unavailable(argv: Sequence[str]) -> str:
+        raise CommandError(list(argv), 127, detail="no defaults in tests")
+
+    monkeypatch.setattr(iterm2_profile, "iterm2_defaults", unavailable)
 
 
 @pytest.fixture(autouse=True)
