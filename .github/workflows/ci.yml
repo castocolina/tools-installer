@@ -2,9 +2,11 @@ name: CI
 
 # Every branch except main runs CI; main moves only by fast-forward to a commit CI already
 # passed (D-09). An outside contribution gets CI once the maintainer pushes their branch here.
+# The registry bot dispatches the same jobs because its default-token push starts no run.
 on:
   push:
     branches-ignore: [main]
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref to save free-tier minutes.
 concurrency:

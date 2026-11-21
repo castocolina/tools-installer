@@ -2,7 +2,8 @@
 
 GitHub Actions can't be run locally, so this test parses .github/workflows/ci.yml and asserts the
 invariants we care about. CI runs on a push to every branch except ``main`` (the commit that
-reaches ``main`` was already tested there). A fast-pass classifier skips the full steps for a
+reaches ``main`` was already tested there) and on a manual dispatch used by the registry bot on
+its own branch. A fast-pass classifier skips the full steps for a
 docs-only change while keeping the required check names byte-identical: ``make dev-setup``,
 ``make validate``, ``make test`` and ``make hooks-e2e`` run behind a fail-closed condition.
 The matrix covers Linux and macOS. A malformed or gutted workflow fails this test before it is
@@ -38,7 +39,8 @@ def test_ci_triggers_on_branch_pushes_except_main() -> None:
     # The fallback to the "on" string also covers a future quoted "on": key.
     data = _load_ci()
     triggers = data.get("on", data.get(True, {}))
-    assert set(triggers) == {"push"}
+    assert set(triggers) == {"push", "workflow_dispatch"}
+    assert triggers["workflow_dispatch"] is None
     assert triggers["push"] == {"branches-ignore": ["main"]}
 
 
@@ -49,7 +51,9 @@ def test_job_id_and_name_are_the_required_contexts() -> None:
 
 
 def test_checkout_fetches_full_history() -> None:
-    checkout = next(step for step in _steps() if step.get("uses") == "actions/checkout@v4")
+    checkout = next(
+        step for step in _steps() if str(step.get("uses", "")).startswith("actions/checkout@")
+    )
     assert checkout["with"]["fetch-depth"] == 0
 
 
