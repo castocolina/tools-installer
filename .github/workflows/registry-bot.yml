@@ -1,0 +1,169 @@
+# Publish a dated bot branch only when the registry changed and the branch does not
+# already hold that change on the current base; the owner lands it through the protected flow.
+# Dispatch only until the owner's proof passes (docs/registry-bot-proof.txt).
+# The shared state cache only speeds a run up.
+# Only a user with write access can dispatch this workflow, and a dispatched ref runs
+# its own code with the write token, so a dispatch is an owner act. No step of this
+# file targets the default branch (a structural guard, tested), but the token could
+# still push an already-green commit to the default branch because the repository sets
+# no push restriction on it; closing that gap is an owner follow-up (a repository
+# setting, outside this phase).
+name: registry-bot
+
+on:
+  workflow_dispatch:
+  # The owner's follow-up commit after the proof enables the schedule.
+  # schedule:
+  #   - cron: "37 6 * * 1"
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: registry-bot
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Restore verify-registry state
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.local/state/tools-installer/verify-registry.json
+          key: verify-registry-${{ github.run_id }}
+          restore-keys: verify-registry-
+      - name: Name the branch
+        run: echo "BRANCH=bot/registry-$(date -u +%F)" >> "$GITHUB_ENV"
+      - name: Bump pins
+        id: bump
+        timeout-minutes: 75
+        run: |
+          code=0
+          uv run --isolated --no-dev python -m installer.verify_registry --write --bumps-only || code=$?
+          case "$code" in 0|1|2) ;; *) echo "verify-registry exited $code" >&2; exit "$code" ;; esac
+      - name: Guard
+        id: guard
+        run: |
+          code=0
+          git diff --quiet -- installer/registry.toml || code=$?
+          case "$code" in 0) changed=false ;; 1) changed=true ;; *) echo "git diff exited $code" >&2; exit "$code" ;; esac
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+      - name: Compare with the bot branch
+        id: compare
+        if: steps.guard.outputs.changed == 'true'
+        run: |
+          remote=$(git ls-remote --heads origin "refs/heads/$BRANCH")
+          same=false
+          expected=
+          if [ -n "$remote" ]; then
+            git fetch --no-tags origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+            expected=$(git rev-parse "refs/remotes/origin/$BRANCH")
+            if git diff --quiet "refs/remotes/origin/$BRANCH" -- installer/registry.toml && [ "$(git rev-parse "$expected^")" = "$(git rev-parse HEAD)" ]; then
+              same=true
+              echo "The bot branch already holds this change on the current base: nothing to publish."
+            fi
+          fi
+          echo "same=$same" >> "$GITHUB_OUTPUT"
+          echo "expected=$expected" >> "$GITHUB_OUTPUT"
+      - name: Upsert the tracking issue
+        id: issue
+        if: steps.guard.outputs.changed == 'true' && steps.compare.outputs.same != 'true'
+        run: |
+          gh label create registry-bot --force --description "Pins proposed by the registry update bot"
+          number=$(gh issue list --label registry-bot --state open --limit 1 --json number --jq '.[0].number // empty')
+          base=$(git rev-parse --short HEAD)
+          body="The registry update bot proposes new pins.
+          Branch: $BRANCH
+          Base commit: $base
+          CI runs on that branch through a dispatch of the CI workflow. Land it only after both required checks are green for that exact commit through the protected flow described in the git workflow guide.
+          Older bot branches are replaced by the newest one.
+          A bumped tool carries a new verified date that certifies its bumped pins only; findings on its other methods still appear in the drift report.
+          Only someone with write access can start this bot and a started run executes the code of its own ref with the write token, so a dispatch is an owner act. No step of the workflow targets the default branch, which is a structural guard, and the repository sets no push restriction on that branch.
+          If this issue stays open after the fast-forward, close it by hand."
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body "$body"
+          else
+            url=$(gh issue create --title "Registry update bot: new pins ready to land" --label registry-bot --body "$body")
+            number="${url##*/}"
+          fi
+          case "$number" in ''|*[!0-9]*) echo "could not read the issue number from: $url" >&2; exit 1 ;; esac
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+      - name: Publish the bot branch
+        id: publish
+        if: steps.guard.outputs.changed == 'true' && steps.compare.outputs.same != 'true'
+        env:
+          EXPECTED: ${{ steps.compare.outputs.expected }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add installer/registry.toml
+          git commit -m "chore(registry): bump pinned releases" -m "Closes #$ISSUE_NUMBER"
+          git push --force-with-lease="refs/heads/$BRANCH:$EXPECTED" origin "HEAD:refs/heads/$BRANCH"
+      - name: Dispatch CI on the bot branch
+        id: dispatch
+        if: steps.guard.outputs.changed == 'true' && steps.compare.outputs.same != 'true'
+        run: |
+          gh workflow run ci.yml --ref "$BRANCH" || {
+            echo "CI dispatch failed, retrying once" >&2
+            sleep 20
+            gh workflow run ci.yml --ref "$BRANCH"
+          }
+      - name: Dispatch CI for an unchanged bot branch
+        id: redispatch
+        if: steps.guard.outputs.changed == 'true' && steps.compare.outputs.same == 'true'
+        env:
+          EXPECTED: ${{ steps.compare.outputs.expected }}
+        run: |
+          seen=$(gh run list --workflow ci.yml --branch "$BRANCH" --json headSha,status,conclusion --jq '.[] | select(.headSha == env.EXPECTED) | select(.status != "completed" or .conclusion == "success") | .headSha')
+          if [ -n "$seen" ]; then
+            echo "CI is running or passed for $EXPECTED: nothing to dispatch."
+          else
+            gh workflow run ci.yml --ref "$BRANCH" || {
+              echo "CI dispatch failed, retrying once" >&2
+              sleep 20
+              gh workflow run ci.yml --ref "$BRANCH"
+            }
+          fi
+      - name: Report a failed push or CI dispatch
+        if: failure() && steps.guard.outputs.changed == 'true' && (steps.publish.outcome == 'failure' || steps.dispatch.outcome == 'failure' || steps.redispatch.outcome == 'failure')
+        env:
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}
+          REDISPATCH_OUTCOME: ${{ steps.redispatch.outcome }}
+        run: |
+          stage="CI dispatch"
+          command="gh workflow run ci.yml --ref $BRANCH"
+          if [ "$PUBLISH_OUTCOME" = "failure" ]; then stage="push"; command="gh workflow run registry-bot.yml --ref $GITHUB_REF_NAME"; fi
+          number=$(gh issue list --label registry-bot --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then gh issue comment "$number" --body "The $stage for $BRANCH failed. Run it again by hand: $command"; else echo "no open registry-bot issue to comment on; run by hand: $command" >&2; fi
+      - name: Delete older bot branches
+        if: steps.guard.outputs.changed == 'true' && (steps.dispatch.outcome == 'success' || steps.redispatch.outcome == 'success')
+        run: |
+          set -o pipefail
+          listing=$(git ls-remote --heads origin 'refs/heads/bot/registry-*')
+          while read -r sha ref; do
+            case "$ref" in
+              "refs/heads/$BRANCH") ;;
+              refs/heads/bot/registry-*) git push --force-with-lease="$ref:$sha" --delete origin "$ref" < /dev/null || echo "could not delete $ref (it changed since it was listed): skipped" >&2 ;;
+              *) echo "ignoring $ref: outside the bot namespace" >&2 ;;
+            esac
+          done <<< "$listing"
+      - name: Save verify-registry state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.local/state/tools-installer/verify-registry.json
+          key: verify-registry-${{ github.run_id }}
