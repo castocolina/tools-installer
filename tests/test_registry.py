@@ -279,6 +279,7 @@ _POST_15_3_HUMAN_TOOLS = {
     "alacritty",
     "copilot",
     "ghostty",  # Phase 30
+    "herdr-app",  # Phase 31
     "iterm2",  # Phase 31
     "neovim",  # Phase 24.1
 }
@@ -302,7 +303,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
         "both": 50,  # Phase 24 adds herdr, unzip and zip (audience both)
         "ai": 8,
-        "human": 30,  # Phase 31 adds iTerm2
+        "human": 31,  # Phase 31 adds iTerm2 and herdr-app
     }
 
 
@@ -800,6 +801,7 @@ MACOS_ONLY = {"gnu-bash", "iterm2"}
 # Apple Containers: Homebrew itself requires macos>=26 and arch=arm64. Membership
 # means the tool cannot work on that platform+arch, not that packaging is inconvenient.
 MACOS_ARM64_ONLY = {"container", "podman"}
+NO_MACOS_INTEL = {"herdr-app"}
 # Membership means the tool provably cannot work on that platform+arch, not
 # that its packaging is inconvenient there.
 NO_LINUX_ARM64 = {"puppeteer"}
@@ -838,6 +840,7 @@ def test_every_tool_resolves_at_least_one_method_on_each_platform() -> None:
                 allowed |= MACOS_ARM64_ONLY
             if platform_os == "macos" and arch != "arm64":
                 allowed |= MACOS_ARM64_ONLY
+                allowed |= NO_MACOS_INTEL
             if platform_os != "macos" and arch == "arm64":
                 allowed |= NO_LINUX_ARM64
             if platform_os in ("debian", "fedora") and arch == "arm64":
@@ -876,6 +879,20 @@ def test_macos_arm64_only_allowlist_stays_honest() -> None:
         assert resolve_methods(tools[tool_id], arm), (
             f"'{tool_id}' must still resolve on macos/arm64"
         )
+
+
+def test_no_macos_intel_allowlist_stays_honest() -> None:
+    tools = _tools_by_id()
+    for tool_id in NO_MACOS_INTEL:
+        assert tool_id in tools
+        for arch, available in (("amd64", False), ("arm64", True)):
+            platform = Platform(
+                os="macos", arch=arch, immutable=False, has_brew=True, os_version="26.0"
+            )
+            assert bool(resolve_methods(tools[tool_id], platform)) is available
+        for platform_os in ("debian", "fedora", "arch"):
+            platform = Platform(os=platform_os, arch="amd64", immutable=False, has_brew=True)
+            assert resolve_methods(tools[tool_id], platform)
 
 
 def test_no_linux_arm64_allowlist_stays_honest() -> None:
@@ -1213,7 +1230,7 @@ def test_drawio_desktop_is_the_only_drawio_row() -> None:
     tools = _tools_by_id()
     assert "drawio-cli" not in tools
     assert tools["drawio-desktop"].audience == "both"
-    assert len(tools) == 88  # Phase 31 adds iTerm2
+    assert len(tools) == 89  # Phase 31 adds iTerm2 and herdr-app
 
 
 def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
@@ -1268,7 +1285,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 28,  # Phase 24 adds unzip and zip (SDKMAN prerequisites)
         "ai": 9,
-        "user": 51,  # Phase 31 adds iTerm2
+        "user": 52,  # Phase 31 adds iTerm2 and herdr-app
     }
 
 
@@ -1378,6 +1395,7 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
         "wezterm",
         "ghostty",
         "iterm2",
+        "herdr-app",
         *tuned,
         *SHELL_INIT_TOOLS,
     }
@@ -2919,6 +2937,16 @@ SCRIPT_LIFECYCLE_DATA: dict[tuple[str, tuple[str, ...], tuple[str, ...]], dict[s
         "paths": ["~/Library/pnpm/bin/pnpm"],
         "remove": None,
         "update": ["pnpm", "self-update"],
+    },
+    ("herdr-app", ("debian", "fedora", "arch"), ()): {
+        "paths": [
+            "~/.local/share/herdr-app/",
+            "~/.local/bin/herdr-app",
+            "~/.local/share/applications/herdr-app.desktop",
+            "~/.local/share/icons/hicolor/scalable/apps/herdr-app.svg",
+        ],
+        "remove": None,
+        "update": None,
     },
     ("kitty", ("debian", "arch", "fedora"), ()): {
         "paths": ["~/.local/kitty.app/"],

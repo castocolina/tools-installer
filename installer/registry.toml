@@ -3273,6 +3273,44 @@ cask = "iterm2"
 app = "iTerm.app"
 min_os_version = "13"
 
+# Verified 2026-11-21: https://releases.herdr.dev/app/install.sh is user-scope, no sudo;
+# the app tarball is verified against the sha256 in latest.json. Linux arm64 is published.
+# It installs herdr-core and hc in ~/.local/bin through a nested unchecked curl | sh when absent;
+# these are outside paths and remain after removal. paths names only the app's own files.
+# XDG_DATA_HOME relocates the app tree, icon and desktop entry; ~/.local/bin/herdr-app stays.
+# The receipt records only declared paths that exist (at least that link); relocated files
+# remain unclaimed and survive uninstall. The app self-updates; rerunning the script updates it,
+# so there is no update or remove command.
+# The macOS cask 0.1.16 is arm64 only, uses ~/Applications via --appdir and links herdr-app
+# into the Homebrew bin (27 D-10 gap); Intel resolves no method (NO_MACOS_INTEL).
+# The vendor macOS script instead uses ~/Applications and ~/.local/bin; flagged for the owner
+# (31 D-12), but the SPEC locks the cask.
+[[tool]]
+id = "herdr-app"
+name = "Herdr desktop app"
+category = "terminal"
+priority = "P3"
+audience = "human"
+tier = "user"
+verified = 2026-11-21
+desc = "Herdr desktop app (herdrdev/herdr-app), not the herdr multiplexer"
+config_paths = ["~/.config/herdr-app"]
+# Install tuning (31 D-14, D-15): the owned clear key in the app's keys.json, seeded with the vendor default when the file is missing; the herdr multiplexer's ~/.config/herdr is never touched.
+post_install = ["apply_terminal_tuning"]
+[[tool.method]]
+kind = "script"
+os = ["debian", "fedora", "arch"]
+url = "https://releases.herdr.dev/app/install.sh"
+shell = "sh"
+bin_dir = "~/.local/bin"
+paths = ["~/.local/share/herdr-app/", "~/.local/bin/herdr-app", "~/.local/share/applications/herdr-app.desktop", "~/.local/share/icons/hicolor/scalable/apps/herdr-app.svg"]
+[[tool.method]]
+kind = "cask"
+os = ["macos"]
+arch = ["arm64"]
+cask = "herdr-app"
+app = "Herdr.app"
+
 # Verified 2026-11-08, re-checked 2026-11-12 against the v0.9.5 tag source (24 D-09, D-10,
 # D-12): herdr is a single static binary published per OS and arch as a raw release asset
 # (herdr-linux-x86_64, herdr-linux-aarch64, herdr-macos-x86_64, herdr-macos-aarch64; the

@@ -252,7 +252,7 @@ def apply_alacritty_keys(
 
 def test_alacritty_row_is_keyed_by_its_registry_id() -> None:
     row = TERMINAL_KEYS["alacritty"]
-    assert set(TERMINAL_KEYS) == {"alacritty", "kitty", "wezterm", "ghostty", "iterm2"}
+    assert set(TERMINAL_KEYS) == {"alacritty", "kitty", "wezterm", "ghostty", "iterm2", "herdr-app"}
     assert row.ownership == OwnedRegion("alacritty-keys")
     assert row.created_record == "terminal-alacritty-created"
     assert row.sibling_regions == ("alacritty",)
@@ -295,6 +295,7 @@ def test_completeness_fails_on_an_empty_table() -> None:
         "wezterm",
         "ghostty",
         "iterm2",
+        "herdr-app",
     }
 
 
@@ -1725,6 +1726,7 @@ def test_only_kitty_wezterm_and_ghostty_bind_the_created_path() -> None:
         "kitty",
         "wezterm",
         "ghostty",
+        "herdr-app",
     }
 
 

@@ -7517,6 +7517,36 @@ def test_iterm2_drift_lands_on_its_own_row(tmp_path: Path, monkeypatch: pytest.M
     assert states[other.id].unconfigured == ()
 
 
+def test_an_unrecorded_herdr_app_row_reads_pending_install_tuning(tmp_path: Path) -> None:
+    tool = _shell_tool("herdr-app")
+    service = _hook_service(tmp_path, frozenset())
+    assert _settled_states(service, [tool])[tool.id].unconfigured == (_TUNING_STEP,)
+    apply_install_tuning(tool, _LINUX, skip_recorded=False)
+    assert _settled_states(service, [tool])[tool.id].unconfigured == ()
+
+
+def test_herdr_app_drift_lands_on_its_own_row(tmp_path: Path) -> None:
+    import json
+
+    tool = _shell_tool("herdr-app")
+    other = _shell_tool("ghostty")
+    apply_install_tuning(tool, _LINUX, skip_recorded=False)
+    apply_install_tuning(other, _LINUX, skip_recorded=False)
+    path = Path.home() / ".config/herdr-app/keys.json"
+    old = "send:old"
+    original = path.read_text()
+    text = original.replace('"send:\\f"', '"send:old"')
+    assert text != original
+    path.write_text(text)
+    record = Path.home() / ".local/share/tools-installer/terminal-tuning-herdr-app"
+    data = json.loads(record.read_text())
+    data["keys"][0][2] = old
+    record.write_text(json.dumps(data))
+    states = _settled_states(_hook_service(tmp_path, frozenset()), [tool, other])
+    assert states[tool.id].unconfigured == (_TUNING_STEP,)
+    assert states[other.id].unconfigured == ()
+
+
 def test_a_pending_iterm2_default_switch_reads_pending_install_tuning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

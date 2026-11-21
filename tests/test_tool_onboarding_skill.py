@@ -669,6 +669,21 @@ def test_iterm2_row_records_what_is_proven() -> None:
     assert "cmd+k" in row[4] and "Custom Directory" in row[5]
 
 
+def test_herdr_app_row_records_what_is_proven() -> None:
+    rows = table_rows(_subsection(_text(SKILL), TABLE_HEADING))
+    row = next(row for row in rows if row[0] == "`herdr-app`")
+    assert len(row) == 7
+    assert all(
+        cell.startswith(status)
+        for cell, status in zip(
+            row[2:], ("unverified", "vendor", "written", "vendor", "unverified"), strict=True
+        )
+    )
+    assert all(term in row[3] for term in ("macOS", "alt-left", "no Alt rows"))
+    assert all(term in row[4] for term in ("ctrl+shift+k", "cmd+k", "picker"))
+    assert all(term in row[5] for term in ("tabs", "new windows are unverified"))
+
+
 def test_table_matches_the_registry() -> None:
     ids = table_ids(table_rows(_subsection(_text(SKILL), TABLE_HEADING)))
     assert ids

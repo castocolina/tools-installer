@@ -28,6 +28,15 @@ from installer.agent_settings import (
     write_if_unchanged,
 )
 from installer.atomic import atomic_write_text
+from installer.herdr_app_keys import (
+    HERDR_APP_CREATED,
+    herdr_app_keys_path,
+    herdr_app_owned_keys,
+    herdr_app_seed,
+    herdr_app_taken,
+    validate_herdr_app,
+    vendor_default,
+)
 from installer.iterm2_profile import (
     ITERM2_CREATED,
     ProfileState,
@@ -383,6 +392,32 @@ def _iterm2_plan(
     )
 
 
+def _herdr_app_keys(
+    platform_os: str, home: Path, environ: Mapping[str, str]
+) -> tuple[OwnedKey, ...]:
+    del home, environ
+    return herdr_app_owned_keys(platform_os)
+
+
+def _herdr_app_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
+    del text, path
+    note = (
+        "herdr-app: cmd+k now sends Ctrl+L in terminals."
+        if platform_os == "macos"
+        else "herdr-app: ctrl+shift+k now clears the screen and scrollback in terminals; "
+        "it was the picker (mod.open:picker), which stays in the palette (ctrl+shift+p) "
+        "and outside terminals."
+    )
+    return KeysPlan(
+        None,
+        notes=(
+            note,
+            "herdr-app: the app stops adding new default shortcuts to a "
+            "keys.json that was edited; add new vendor defaults by hand after an update.",
+        ),
+    )
+
+
 TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
     "alacritty": KeysRow(
         ownership=OwnedRegion(ALACRITTY_KEYS),
@@ -481,6 +516,26 @@ TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
         ),
         created_record=ITERM2_CREATED,
         same_directory=Writes('"Custom Directory": "Recycle"'),
+    ),
+    "herdr-app": KeysRow(
+        ownership=OwnedKeys(
+            seed=herdr_app_seed, pinned=vendor_default, keys=_herdr_app_keys, taken=herdr_app_taken
+        ),
+        config_path=herdr_app_keys_path,
+        plan=_herdr_app_plan,
+        validate=validate_herdr_app,
+        summary=(
+            "herdr-app keys: the clear chord (ctrl+shift+k on Linux, cmd+k on macOS) sends Ctrl+L "
+            "(screen and scrollback) in terminals unless you already bind it; new tabs and splits "
+            "already open in the current directory."
+        ),
+        created_record=HERDR_APP_CREATED,
+        same_directory=Vendor(
+            "2026-11-21, herdr-app v0.1.16 README and defaults/AGENTS.md: new tabs and splits "
+            "open in the current directory; new windows are unverified. "
+            "The installer writes nothing."
+        ),
+        bind_created_path=True,
     ),
 }
 
@@ -731,6 +786,14 @@ def _apply_owned_keys(
         before = read_settings(path)
         original = snapshot_text(before)
         text = original if original.strip() else owned.seed(platform_os)
+        if tool_id == "herdr-app":
+            try:
+                parsed: object = json.loads(text)
+            except ValueError:
+                pass
+            else:
+                if not isinstance(parsed, dict):
+                    row.validate(text)
         document = _parse_owned(text)
         row.validate(text)
     except OSError as exc:
