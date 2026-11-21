@@ -1,4 +1,6 @@
 import hashlib
+import json
+import shlex
 import shutil
 import tomllib
 from collections.abc import Callable
@@ -10,7 +12,7 @@ import pytest
 
 import installer.engine as engine_mod
 import installer.postinstall as pi
-from installer import app, receipts
+from installer import agent_settings, app, bun_globals, receipts
 from installer.engine import install_tool
 from installer.enums import InstallStatus
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool, load_tools
@@ -23,6 +25,7 @@ from tests.test_download import fixture_runner
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 _CODEGRAPH = "codegraph-mcp-register"
+_PLAYWRIGHT = "playwright-mcp-register"
 # Harness ids: the keys of every hook target map. `cursor` is the Cursor harness;
 # the catalog id `cursor-agent` is display-only (HOST_CATALOG_IDS).
 _HARNESSES = ("claude", "codex", "opencode", "cursor", "copilot", "pi")
@@ -109,6 +112,343 @@ def _write_receipt(hooks: dict[str, tuple[str, ...]] | None = None) -> None:
             hooks=hooks or {},
         )
     )
+
+
+def test_the_hook_pair_declares_the_consent_host_and_the_supported_filter() -> None:
+    pair = pi.POSTINSTALL_HOOKS[_PLAYWRIGHT]
+    assert pair.consent == frozenset({"claude"})
+    assert pair.targets is not None and pair.targets["cursor"] == "cursor-agent"
+    assert pair.unregister is None
+    assert pair.supported is not None
+    assert pair.supported(None, lambda _argv: None, ("claude", "pi", "codex")) == (
+        "claude",
+        "codex",
+    )
+    assert pair.consent_handoff is not None
+    assert "~/.claude.json" in pair.consent_disclosure
+    assert "~/.claude/settings.json" in pair.consent_disclosure
+    assert pair.rereads is True
+    assert all(
+        not pi.POSTINSTALL_HOOKS[name].rereads
+        for name in (_CODEGRAPH, "herdr-integration", "tealdeer-cache")
+    )
+
+
+_PW_METHOD = Method(
+    kind="bun", params={"npm_pkg": "@playwright/mcp", "versions": {"@playwright/mcp": "0.0.85"}}
+)
+_PW_HOSTS = ("claude", "codex", "opencode", "cursor", "copilot")
+
+
+def _pw_setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Tool, Path]:
+    directory = tmp_path / "my bun's dir"
+    directory.mkdir()
+    bunx = directory / "bunx"
+    bunx.write_text("", encoding="utf-8")
+    bunx.chmod(0o755)
+    monkeypatch.setattr(bun_globals, "resolve_bun", lambda: str(directory / "bun"))
+    tool = Tool(
+        id="playwright-mcp",
+        name="Playwright",
+        category="ai",
+        cmd="playwright-mcp",
+        methods=(_PW_METHOD,),
+        postinstall=_PLAYWRIGHT,
+    )
+    receipts.write(replace(_receipt_for("bun", "test"), tool=tool.id))
+    return tool, bunx
+
+
+def _pw_path(host: str) -> Path:
+    agent = "cursor-agent" if host == "cursor" else host
+    return agent_settings.mcp_file(agent, home=Path.home(), platform_os="linux")
+
+
+def _pw_run(
+    tool: Tool, hosts: frozenset[str], confirmed: frozenset[str] | None = None
+) -> pi.HookOutcome:
+    return pi.register_hooks(tool, _PW_METHOD, lambda _cmd: None, hosts, confirmed_hosts=confirmed)
+
+
+def _wrapper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
+    wrapper = tmp_path / "chrome wrapper"
+    wrapper.touch()
+    release = tmp_path / "os-release"
+    release.write_text("ID=bazzite\n", encoding="utf-8")
+    monkeypatch.setattr(pi, "FLATPAK_CHROME_PATH", str(wrapper))
+    monkeypatch.setattr(pi, "OS_RELEASE_PATH", release)
+    return str(wrapper)
+
+
+def test_register_writes_every_present_host_except_claude_until_confirmed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool, bunx = _pw_setup(monkeypatch, tmp_path)
+    registered, warning = pi.register_hooks(
+        tool, _PW_METHOD, lambda _cmd: None, frozenset((*_PW_HOSTS, "pi"))
+    )
+    assert set(registered) == set(_PW_HOSTS) - {"claude"}
+    for host in registered:
+        text = _pw_path(host).read_text(encoding="utf-8")
+        assert str(bunx) in text and "@playwright/mcp@0.0.85" in text
+    assert not _pw_path("claude").exists()
+    assert not (Path.home() / ".claude/settings.json").exists()
+    receipt = receipts.read(tool.id)
+    assert receipt is not None and set(receipt.hooks[_PLAYWRIGHT]) == set(registered)
+    assert warning is not None and "pi mcp add" in warning
+    assert _pw_run(tool, frozenset({"claude"}), frozenset({"claude"}))[0] == ("claude",)
+    assert _pw_path("claude").exists()
+    receipt = receipts.read(tool.id)
+    assert receipt is not None and "claude" in receipt.hooks[_PLAYWRIGHT]
+
+
+def test_the_install_time_warning_names_the_next_step_and_the_exact_claude_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool, bunx = _pw_setup(monkeypatch, tmp_path)
+    _, warning = _pw_run(tool, frozenset({"claude"}))
+    assert (
+        warning is not None
+        and "Reconfigure" in warning
+        and "confirm" in warning
+        and tool.id in warning
+    )
+    assert shlex.split(warning.split("or run: ", 1)[1]) == [
+        "claude",
+        "mcp",
+        "add",
+        "--scope",
+        "user",
+        "--transport",
+        "stdio",
+        "playwright",
+        "--",
+        str(bunx),
+        "@playwright/mcp@0.0.85",
+    ]
+    settings = Path.home() / ".claude/settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(
+        '{"enabledPlugins":{"playwright@claude-plugins-official":true}}', encoding="utf-8"
+    )
+    assert _pw_run(tool, frozenset({"claude"}))[1] is None
+    _wrapper(monkeypatch, tmp_path)
+    warning = _pw_run(tool, frozenset({"claude"}))[1]
+    assert (
+        warning is not None
+        and "env.PLAYWRIGHT_MCP_EXECUTABLE_PATH" in warning
+        and "Reconfigure" in warning
+    )
+    assert _pw_run(tool, frozenset())[1] is None
+
+
+@pytest.mark.parametrize("host", _PW_HOSTS)
+def test_an_existing_playwright_entry_is_kept_and_reported(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, host: str
+) -> None:
+    tool, _ = _pw_setup(monkeypatch, tmp_path)
+    path = _pw_path(host)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = (
+        '[mcp_servers.playwright]\ncommand = "mine"\n'
+        if host == "codex"
+        else (
+            '{"mcp":{"servers":{"playwright":{"command":"mine"}}}}'
+            if host == "opencode"
+            else '{"mcpServers":{"playwright":{"command":"mine"}}}'
+        )
+    )
+    path.write_text(text, encoding="utf-8")
+    registered, warning = _pw_run(tool, frozenset({host}), frozenset({host}))
+    assert registered == () and path.read_text(encoding="utf-8") == text
+    assert warning is not None and "left yours" in warning
+    receipt = receipts.read(tool.id)
+    assert receipt is not None and host not in receipt.hooks[_PLAYWRIGHT]
+
+
+def test_opencode_old_shape_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    tool, _ = _pw_setup(monkeypatch, tmp_path)
+    path = _pw_path("opencode")
+    path.parent.mkdir(parents=True)
+    text = '{"mcp":{"other":{"type":"local"}}}'
+    path.write_text(text, encoding="utf-8")
+    registered, warning = _pw_run(tool, frozenset({"opencode"}))
+    assert registered == () and path.read_text(encoding="utf-8") == text
+    assert warning is not None and warning.startswith("partial:") and "yourself" in warning
+
+
+@pytest.mark.parametrize("wrapper", [False, True])
+def test_claude_with_the_official_plugin_writes_only_the_env_key_when_the_wrapper_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, wrapper: bool
+) -> None:
+    tool, _ = _pw_setup(monkeypatch, tmp_path)
+    settings = Path.home() / ".claude/settings.json"
+    settings.parent.mkdir(parents=True)
+    text = '{"enabledPlugins":{"playwright@claude-plugins-official":true}}'
+    settings.write_text(text, encoding="utf-8")
+    path = _wrapper(monkeypatch, tmp_path) if wrapper else None
+    registered, _ = _pw_run(tool, frozenset({"claude"}), frozenset({"claude"}))
+    assert not _pw_path("claude").exists()
+    assert registered == (("claude",) if wrapper else ())
+    if path is None:
+        assert settings.read_text(encoding="utf-8") == text
+    else:
+        assert (
+            json.loads(settings.read_text(encoding="utf-8"))["env"][
+                "PLAYWRIGHT_MCP_EXECUTABLE_PATH"
+            ]
+            == path
+        )
+
+
+@pytest.mark.parametrize("wrapper", [False, True])
+def test_the_flatpak_path_reaches_each_server_entry_only_when_the_wrapper_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, wrapper: bool
+) -> None:
+    tool, _ = _pw_setup(monkeypatch, tmp_path)
+    path = _wrapper(monkeypatch, tmp_path) if wrapper else None
+    registered, _ = _pw_run(tool, frozenset(_PW_HOSTS), frozenset(_PW_HOSTS))
+    assert set(registered) == set(_PW_HOSTS)
+    for host in _PW_HOSTS:
+        text = _pw_path(host).read_text(encoding="utf-8")
+        assert ("PLAYWRIGHT_MCP_EXECUTABLE_PATH" in text) is wrapper
+        if path is not None:
+            assert path in text
+
+
+@pytest.mark.parametrize(
+    ("release", "expected"),
+    [
+        ("ID=bazzite", True),
+        ('ID="BAZZITE"', True),
+        ("ID=fedora\nVARIANT_ID=Bazzite", True),
+        ("ID=fedora\nVARIANT_ID=silverblue", False),
+        ("ID=fedora", False),
+        ("ID=debian", False),
+        ("ID=arch", False),
+        (None, False),
+    ],
+)
+def test_the_flatpak_seam_needs_bazzite_and_the_wrapper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, release: str | None, expected: bool
+) -> None:
+    wrapper = _wrapper(monkeypatch, tmp_path)
+    release_file = tmp_path / "os-release"
+    if release is None:
+        release_file.unlink()
+    else:
+        release_file.write_text(release, encoding="utf-8")
+    assert pi.flatpak_chrome() == (wrapper if expected else None)
+    tool, _ = _pw_setup(monkeypatch, tmp_path)
+    _pw_run(tool, frozenset({"codex"}))
+    assert (
+        "PLAYWRIGHT_MCP_EXECUTABLE_PATH" in _pw_path("codex").read_text(encoding="utf-8")
+    ) is expected
+    Path(wrapper).unlink()
+    assert pi.flatpak_chrome() is None
+
+
+@pytest.mark.parametrize("confirmed", [None, frozenset({"codex"}), frozenset({"codex", "claude"})])
+def test_a_host_outside_the_confirmed_set_is_not_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, confirmed: frozenset[str] | None
+) -> None:
+    tool, _ = _pw_setup(monkeypatch, tmp_path)
+    registered, warning = _pw_run(tool, frozenset({"codex", "claude"}), confirmed)
+    assert "codex" in registered
+    assert _pw_path("claude").exists() is (confirmed is not None and "claude" in confirmed)
+    if confirmed == frozenset({"codex"}):
+        assert warning is not None and "appeared after you confirmed" in warning
+    assert not (Path.home() / ".claude/settings.json").exists()
+
+
+def test_confirmed_absent_host_is_never_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool, _ = _pw_setup(monkeypatch, tmp_path)
+    assert _pw_run(tool, frozenset(), frozenset({"claude"}))[0] == ()
+    assert not _pw_path("claude").exists()
+
+
+def test_existing_claude_server_suppresses_handoff(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool, _ = _pw_setup(monkeypatch, tmp_path)
+    _pw_path("claude").write_text('{"mcpServers":{"playwright":{}}}', encoding="utf-8")
+    assert _pw_run(tool, frozenset({"claude"}))[1] is None
+
+
+def test_unreadable_os_release_is_not_bazzite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _wrapper(monkeypatch, tmp_path)
+    monkeypatch.setattr(pi, "OS_RELEASE_PATH", tmp_path)
+    assert pi.flatpak_chrome() is None
+
+
+def test_the_hand_off_command_is_shell_quoted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool, bunx = _pw_setup(monkeypatch, tmp_path)
+    wrapper = _wrapper(monkeypatch, tmp_path)
+    warning = _pw_run(tool, frozenset({"claude"}))[1]
+    assert warning is not None
+    assert shlex.split(warning.split("or run: ", 1)[1]) == [
+        "claude",
+        "mcp",
+        "add",
+        "--scope",
+        "user",
+        "--env",
+        f"PLAYWRIGHT_MCP_EXECUTABLE_PATH={wrapper}",
+        "--transport",
+        "stdio",
+        "playwright",
+        "--",
+        str(bunx),
+        "@playwright/mcp@0.0.85",
+    ]
+
+
+@pytest.mark.parametrize("failure", ["missing", "nonexecutable", "no-bun", "no-pin"])
+def test_the_server_command_is_an_executable_bunx_and_the_pin_comes_from_the_methods_versions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str
+) -> None:
+    tool, bunx = _pw_setup(monkeypatch, tmp_path)
+    method = _PW_METHOD
+    if failure == "missing":
+        bunx.unlink()
+    elif failure == "nonexecutable":
+        bunx.chmod(0o644)
+    elif failure == "no-bun":
+        monkeypatch.setattr(bun_globals, "resolve_bun", lambda: None)
+    else:
+        method = Method(kind="bun", params={})
+    registered, warning = pi.register_hooks(tool, method, lambda _cmd: None, frozenset({"codex"}))
+    assert registered == () and not _pw_path("codex").exists()
+    assert warning is not None and ("pinned" if failure == "no-pin" else "bunx") in warning
+
+
+@pytest.mark.parametrize("host", _PW_HOSTS)
+def test_a_recorded_host_whose_server_is_gone_is_registered_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, host: str
+) -> None:
+    tool, _ = _pw_setup(monkeypatch, tmp_path)
+    hosts = frozenset({host})
+    assert _pw_run(tool, hosts, hosts)[0] == (host,)
+    path = _pw_path(host)
+    original = path.read_bytes()
+    assert _pw_run(tool, hosts, hosts)[0] == (host,)
+    assert path.read_bytes() == original
+    path.unlink()
+    if host == "claude":
+        registered, warning = _pw_run(tool, hosts)
+        assert (
+            registered == () and not path.exists() and warning is not None and "or run:" in warning
+        )
+    assert _pw_run(tool, hosts, hosts)[0] == (host,)
+    assert path.read_bytes() == original
+    assert _pw_run(tool, hosts, hosts)[0] == (host,)
+    assert path.read_bytes() == original
 
 
 def test_codegraph_hook_composes_csv_from_present_hosts_only() -> None:
@@ -322,7 +662,9 @@ def test_only_herdr_and_codegraph_map_pi_and_targets_stay_harnesses() -> None:
     for name, pair in pi.POSTINSTALL_HOOKS.items():
         if pair.targets is None:
             continue
-        assert ("pi" in pair.targets) == (name in {"herdr-integration", _CODEGRAPH}), name
+        assert ("pi" in pair.targets) == (name in {"herdr-integration", _CODEGRAPH, _PLAYWRIGHT}), (
+            name
+        )
         assert set(pair.targets) <= set(pi.HARNESS_PRESENCE), name
 
 

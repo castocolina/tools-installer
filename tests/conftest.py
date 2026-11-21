@@ -123,6 +123,12 @@ def toolchain_allowed_root(tmp_path_factory: pytest.TempPathFactory) -> None:
 
 
 @pytest.fixture(autouse=True)
+def no_flatpak_chrome(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Do not inspect the host's Flatpak Chrome wrapper."""
+    monkeypatch.setattr(postinstall, "FLATPAK_CHROME_PATH", str(tmp_path / "missing-chrome"))
+
+
+@pytest.fixture(autouse=True)
 def no_wezterm_show_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test launches wezterm; read-back sees it as absent."""
 

@@ -808,6 +808,39 @@ def test_app_kind_routes_to_app_executor(monkeypatch: pytest.MonkeyPatch):
     assert seen == ["app"]
 
 
+def test_playwright_install_warns_about_claude_consent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from installer import bun_globals
+
+    bunx = tmp_path / "bunx"
+    bunx.touch()
+    bunx.chmod(0o755)
+    monkeypatch.setattr(bun_globals, "resolve_bun", lambda: str(tmp_path / "bun"))
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude"}))
+    (Path.home() / ".claude").mkdir()
+    method = Method(
+        kind="bun", params={"npm_pkg": "@playwright/mcp", "versions": {"@playwright/mcp": "0.0.85"}}
+    )
+    tool = _tool(method, postinstall="playwright-mcp-register", tool_id="playwright-mcp")
+    _fake_perform(monkeypatch)
+
+    def inventory(*, has_brew: bool) -> ManagerInventory:
+        return ManagerInventory(None, None, None, None, None, bun_globals={})
+
+    outcome = install_tool(
+        tool,
+        _platform(),
+        runner=lambda _cmd: None,
+        present=lambda _tool: False,
+        read_inventory_fn=inventory,
+    )
+    assert outcome.status is InstallStatus.INSTALLED
+    assert outcome.postinstall_warning is not None and "Reconfigure" in outcome.postinstall_warning
+    assert "claude mcp add" in outcome.postinstall_warning
+    assert not (Path.home() / ".claude.json").exists()
+
+
 def test_postinstall_hook_dispatches_after_a_successful_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

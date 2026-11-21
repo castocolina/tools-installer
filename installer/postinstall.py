@@ -15,13 +15,15 @@ records what it registered in `receipt.hooks`, so removal can undo exactly that.
 import json
 import os
 import re
+import shlex
 import shutil
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
+from typing import cast
 
-from installer import agent_settings, receipts, versions
+from installer import agent_settings, bun_globals, receipts, versions
 from installer.locations import bin_dir
 from installer.model import HARNESS_MARKER_DIRS, Method, Tool
 from installer.run import (
@@ -527,6 +529,179 @@ def _tealdeer_cache(method: Method, runner: Runner, _harnesses: tuple[str, ...])
     return (), None
 
 
+FLATPAK_CHROME_PATH = "/var/lib/flatpak/exports/bin/com.google.Chrome"
+OS_RELEASE_PATH = Path("/etc/os-release")
+
+
+def is_bazzite() -> bool:
+    """Distinguish Bazzite from other immutable Fedora variants."""
+    try:
+        lines = OS_RELEASE_PATH.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return False
+    for line in lines:
+        key, sep, value = line.partition("=")
+        if (
+            sep
+            and key.strip() in {"ID", "VARIANT_ID"}
+            and value.strip().strip("\"'").lower() == "bazzite"
+        ):
+            return True
+    return False
+
+
+def flatpak_chrome() -> str | None:
+    return FLATPAK_CHROME_PATH if os.path.isfile(FLATPAK_CHROME_PATH) and is_bazzite() else None
+
+
+_PLAYWRIGHT_TARGETS = {
+    "claude": "claude",
+    "codex": "codex",
+    "opencode": "opencode",
+    "cursor": "cursor-agent",
+    "copilot": "copilot",
+    "pi": "pi",
+}
+PLAYWRIGHT_CONSENT_DISCLOSURE = (
+    "writes mcpServers.playwright in ~/.claude.json, and env.PLAYWRIGHT_MCP_EXECUTABLE_PATH "
+    "in ~/.claude/settings.json when the official Playwright plugin is on and Chrome is a Flatpak"
+)
+
+
+def _playwright_command(method: Method) -> tuple[str, str] | None:
+    raw = method.params.get("versions")
+    pin = cast(dict[str, object], raw).get("@playwright/mcp") if isinstance(raw, dict) else None
+    if not isinstance(pin, str) or not pin:
+        return None
+    bun = bun_globals.resolve_bun()
+    if bun is None:
+        return None
+    bunx = Path(bun).absolute().with_name("bunx")
+    if not bunx.is_file() or not os.access(bunx, os.X_OK):
+        return None
+    return str(bunx), f"@playwright/mcp@{pin}"
+
+
+def _playwright_register(method: Method, runner: Runner, harnesses: tuple[str, ...]) -> HookOutcome:
+    del runner
+    raw = method.params.get("versions")
+    pin = cast(dict[str, object], raw).get("@playwright/mcp") if isinstance(raw, dict) else None
+    if not isinstance(pin, str) or not pin:
+        return (), "playwright-mcp: no pinned version in the registry method; not registered"
+    resolved = _playwright_command(method)
+    if resolved is None:
+        return (
+            (),
+            "playwright-mcp: no executable bunx found beside bun; not registered "
+            "(install bun, then run Reconfigure for playwright-mcp)",
+        )
+    command, spec = resolved
+    chrome = flatpak_chrome()
+    home = Path.home()
+    done: list[str] = []
+    notes: list[str] = []
+    for host in harnesses:
+        if host == "pi":
+            notes.append("pi: not written (no ledger); add the server yourself with pi mcp add")
+            continue
+        try:
+            if host == "claude" and agent_settings.claude_plugin_enabled(
+                home=home, platform_os="linux", environ=os.environ
+            ):
+                notes.append("claude: the official Playwright plugin is enabled; left yours")
+                if chrome is None or agent_settings.claude_env_set(
+                    home=home, platform_os="linux", environ=os.environ
+                ):
+                    continue
+                result = agent_settings.apply_value(
+                    "claude",
+                    agent_settings.MCP_ENV_SETTING,
+                    chrome,
+                    home=home,
+                    platform_os="linux",
+                    environ=os.environ,
+                )
+            else:
+                result = agent_settings.apply_mcp_server(
+                    _PLAYWRIGHT_TARGETS[host],
+                    command=command,
+                    spec=spec,
+                    executable_path=chrome,
+                    home=home,
+                    platform_os="linux",
+                    environ=os.environ,
+                )
+            if result.refused:
+                first = result.refused.splitlines()[0]
+                notes.append(first if first.startswith("partial:") else f"{host}: {first}")
+            elif any(key.kind == "set_by_you" for key in result.keys):
+                notes.append(f"{host}: you already have a playwright server; left yours")
+            elif any(key.kind in {"wrote", "already"} for key in result.keys):
+                done.append(host)
+        except (OSError, ValueError) as exc:
+            notes.append(f"{host}: {exc}")
+    return tuple(done), "; ".join(notes) or None
+
+
+def _playwright_supported(
+    binary: str | None, probe: Callable[[list[str]], str | None], pending: tuple[str, ...]
+) -> tuple[str, ...]:
+    del binary, probe
+    return tuple(host for host in pending if host != "pi")
+
+
+def _playwright_settled(binary: str, probe: Callable[[list[str]], str | None]) -> frozenset[str]:
+    del binary, probe
+    home = Path.home()
+    settled = {
+        host
+        for host, agent in _PLAYWRIGHT_TARGETS.items()
+        if host != "pi"
+        and agent_settings.mcp_server_present(
+            agent, home=home, platform_os="linux", environ=os.environ
+        )
+    }
+    if agent_settings.claude_plugin_enabled(
+        home=home, platform_os="linux", environ=os.environ
+    ) and (
+        flatpak_chrome() is None
+        or agent_settings.claude_env_set(home=home, platform_os="linux", environ=os.environ)
+    ):
+        settled.add("claude")
+    return frozenset(settled)
+
+
+def _playwright_consent_handoff(method: Method) -> str | None:
+    resolved = _playwright_command(method)
+    if resolved is None:
+        return None
+    home = Path.home()
+    if agent_settings.mcp_server_present(
+        "claude", home=home, platform_os="linux", environ=os.environ
+    ):
+        return None
+    chrome = flatpak_chrome()
+    if agent_settings.claude_plugin_enabled(home=home, platform_os="linux", environ=os.environ):
+        if chrome is None or agent_settings.claude_env_set(
+            home=home, platform_os="linux", environ=os.environ
+        ):
+            return None
+        return (
+            "claude: the official Playwright plugin is enabled; set "
+            "env.PLAYWRIGHT_MCP_EXECUTABLE_PATH in ~/.claude/settings.json yourself, "
+            "or open Reconfigure for playwright-mcp and confirm the register step"
+        )
+    command, spec = resolved
+    argv = ["claude", "mcp", "add", "--scope", "user"]
+    if chrome is not None:
+        argv += ["--env", f"PLAYWRIGHT_MCP_EXECUTABLE_PATH={chrome}"]
+    argv += ["--transport", "stdio", "playwright", "--", command, spec]
+    return (
+        "claude: not registered yet, it needs your OK: open Reconfigure for playwright-mcp "
+        "and confirm the register step, or run: " + shlex.join(argv)
+    )
+
+
 @dataclass(frozen=True)
 class HookPair:
     """One hook. `targets` maps a harness id to the vendor's own target id; `None`
@@ -550,9 +725,26 @@ class HookPair:
         ]
         | None
     ) = None
+    # Consent hosts are written only inside a confirmed plan step.
+    consent: frozenset[str] = frozenset()
+    consent_handoff: Callable[[Method], str | None] | None = None
+    consent_disclosure: str = ""
+    # A rereading hook is absent-only and idempotent; its settled read supersedes the receipt.
+    rereads: bool = False
 
 
 POSTINSTALL_HOOKS: dict[str, HookPair] = {
+    # Undo is the ledger revert from app._after_removal. Settled is read only on PATH.
+    "playwright-mcp-register": HookPair(
+        targets=_PLAYWRIGHT_TARGETS,
+        register=_playwright_register,
+        settled=_playwright_settled,
+        supported=_playwright_supported,
+        consent=frozenset({"claude"}),
+        consent_handoff=_playwright_consent_handoff,
+        consent_disclosure=PLAYWRIGHT_CONSENT_DISCLOSURE,
+        rereads=True,
+    ),
     "codegraph-mcp-register": HookPair(
         targets=_CODEGRAPH_TARGETS,
         register=_codegraph_register,
@@ -639,7 +831,12 @@ def run_postinstall(
 
 
 def register_hooks(
-    tool: Tool, method: Method, runner: Runner, hosts: frozenset[str] | None = None
+    tool: Tool,
+    method: Method,
+    runner: Runner,
+    hosts: frozenset[str] | None = None,
+    *,
+    confirmed_hosts: frozenset[str] | None = None,
 ) -> HookOutcome:
     """Register the tool's hook for the present hosts its receipt does not record yet.
 
@@ -661,9 +858,29 @@ def register_hooks(
     if receipt is None:
         return (), "hook not registered: no install receipt to record it in"
     present = present_hosts() if hosts is None else hosts
-    recorded = frozenset(receipt.hooks.get(name, ()))
+    recorded = frozenset[str]() if pair.rereads else frozenset(receipt.hooks.get(name, ()))
     wanted = (present | frozenset(pair.standalone)) - recorded
+    notes: list[str] = []
+    if confirmed_hosts is None:
+        if wanted & pair.consent and pair.consent_handoff is not None:
+            handoff = pair.consent_handoff(method)
+            if handoff:
+                notes.append(handoff)
+        wanted -= pair.consent
+    else:
+        left = wanted & pair.consent - confirmed_hosts
+        if left and pair.settled is not None:
+            left -= pair.settled("", lambda _argv: None)
+        if left:
+            notes.append(
+                f"{host_labels(left)}: appeared after you confirmed; not registered, "
+                "open Reconfigure again"
+            )
+        wanted &= confirmed_hosts
     registered, warning = run_postinstall(name, method, runner, wanted)
+    if warning:
+        notes.insert(0, warning)
+    warning = "; ".join(notes) or None
     # An empty entry is recorded too: "hooks known, none registered yet" is swept for the
     # next host, unlike a receipt written before hooks were recorded (CR-06).
     if registered or name not in receipt.hooks:
