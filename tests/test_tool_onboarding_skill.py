@@ -684,6 +684,22 @@ def test_herdr_app_row_records_what_is_proven() -> None:
     assert all(term in row[5] for term in ("tabs", "new windows are unverified"))
 
 
+def test_the_herdr_app_row_records_the_container_evidence_once() -> None:
+    rows = table_rows(_subsection(_text(SKILL), TABLE_HEADING))
+    row = next(row for row in rows if row[0] == "`herdr-app`")
+    assert len(row) == 7
+    clause = "install, seeded keys and removal read back in a disposable container, 31 D-17"
+    assert [cell.count(clause) for cell in row] == [0, 0, 0, 0, 1, 0, 0]
+    assert all(
+        cell.startswith(status + ":")
+        for cell, status in zip(
+            row[2:6], ("unverified", "vendor", "written", "vendor"), strict=True
+        )
+    )
+    iterm = next(row for row in rows if row[0] == "`iterm2`")
+    assert all("container" not in cell for cell in iterm)
+
+
 def test_table_matches_the_registry() -> None:
     ids = table_ids(table_rows(_subsection(_text(SKILL), TABLE_HEADING)))
     assert ids

@@ -3285,6 +3285,13 @@ min_os_version = "13"
 # into the Homebrew bin (27 D-10 gap); Intel resolves no method (NO_MACOS_INTEL).
 # The vendor macOS script instead uses ~/Applications and ~/.local/bin; flagged for the owner
 # (31 D-12), but the SPEC locks the cask.
+# Verified 2026-11-21: scripts/container-e2e-verify.sh herdr-app installed via the vendor script in Fedora with libxcb and libxkbcommon.
+# In app-first and herdr-first, INSTALL_OK and KEYS_OK read seeded keys.json as the pinned vendor default plus the owned key.
+# Digests were taken with the other tool present: in herdr-first, ISOLATION_OK at install and removal showed the existing
+# multiplexer binary and seeded ~/.config/herdr byte-identical around the app's install and removal; REMOVE_OK showed
+# every app-placed path, ~/.config/herdr-app, receipt and records gone. In app-first, REVERSE_OK at install showed the app's
+# binary, declared paths and ~/.config/herdr-app byte-identical around the multiplexer's install; in both orders REVERSE_OK
+# at removal showed the same files byte-identical around the multiplexer's removal. herdr-core and hc remain in ~/.local/bin by design (SPEC R3).
 [[tool]]
 id = "herdr-app"
 name = "Herdr desktop app"

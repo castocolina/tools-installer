@@ -20,6 +20,47 @@ from installer.uninstall import removal_plan
 REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 
 
+def test_the_herdr_app_entry_records_the_container_proof() -> None:
+    lines = REGISTRY.read_text(encoding="utf-8").splitlines()
+    blocks: dict[str, list[str]] = {}
+    for tool_id in ("herdr-app", "iterm2"):
+        index = lines.index(f'id = "{tool_id}"')
+        assert lines[index - 1] == "[[tool]]"
+        comments: list[str] = []
+        for line in reversed(lines[: index - 1]):
+            if not line.startswith("#"):
+                break
+            comments.append(line)
+        blocks[tool_id] = list(reversed(comments))
+    comments = blocks["herdr-app"]
+    assert len(comments) <= 26
+    prefix = "# Verified 2026-11-21: scripts/container-e2e-verify.sh herdr-app"
+    starts = [i for i, line in enumerate(comments) if line.startswith(prefix)]
+    assert len(starts) == 1
+    paragraph = comments[starts[0] :]
+    assert len(paragraph) <= 8
+    text = " ".join(paragraph)
+    for phrase in (
+        "libxcb",
+        "libxkbcommon",
+        "byte-identical",
+        "herdr-core",
+        "hc",
+        "~/.config/herdr-app",
+        "Fedora",
+        "INSTALL_OK",
+        "KEYS_OK",
+        "ISOLATION_OK",
+        "REVERSE_OK",
+        "REMOVE_OK",
+        "app-first",
+        "herdr-first",
+        "with the other tool present",
+    ):
+        assert phrase in text
+    assert "container-e2e-verify" not in " ".join(blocks["iterm2"])
+
+
 def test_the_herdr_app_entry_records_its_facts() -> None:
     tool = next(t for t in load_tools(REGISTRY) if t.id == "herdr-app")
     assert (tool.name, tool.category, tool.tier, tool.audience, tool.priority) == (
