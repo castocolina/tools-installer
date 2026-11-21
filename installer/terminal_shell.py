@@ -36,6 +36,7 @@ from installer.terminal_regions import (
     ALACRITTY,
     GHOSTTY,
     GHOSTTY_CREATED,
+    GHOSTTY_INCLUDE_REPORT,
     WEZTERM_SKELETON,
     Placement,
     TerminalShellError,
@@ -552,9 +553,7 @@ def _sync_ghostty(
     if scan.user_command:
         warnings.append("ghostty: partial: you already set command")
     if scan.config_file:
-        warnings.append(
-            "ghostty: partial: you include other files (config-file); they are not followed"
-        )
+        warnings.append(GHOSTTY_INCLUDE_REPORT)
     swept = False
     if body is None:
         swept, sweep_warnings = _strip_ghostty_regions(

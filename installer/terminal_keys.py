@@ -19,6 +19,7 @@ from installer.terminal_regions import (
     ALACRITTY_KEYS,
     GHOSTTY,
     GHOSTTY_CREATED,
+    GHOSTTY_INCLUDE_REPORT,
     GHOSTTY_KEYS,
     KITTY,
     KITTY_CREATED,
@@ -212,19 +213,22 @@ def _ghostty_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
     scan = scan_ghostty(platform_os, Path.home(), os.environ)
     if scan.blocked:
         return KeysPlan(None, refusal=scan.blocked[0])
+    reports = scan.reports
+    if scan.config_file and platform_os == "macos":
+        reports = (*reports, GHOSTTY_INCLUDE_REPORT)
     if scan.clears:
         return KeysPlan(
-            None, scan.reports, refusal="you set keybind = clear, which would clear these keys"
+            None, reports, refusal="you set keybind = clear, which would clear these keys"
         )
     chord, send = clear_binding(TERMINAL_KEYS["ghostty"], platform_os)
     trigger = "super+k" if chord == "cmd+k" else chord
     if ghostty_chord(f"{trigger}=x") in scan.taken:
-        return KeysPlan(None, (*scan.reports, f"ghostty: partial: you already bind {trigger}"))
+        return KeysPlan(None, (*reports, f"ghostty: partial: you already bind {trigger}"))
     escaped = "".join(f"\\x{ord(character):02x}" for character in send)
     notes = (
         ("ghostty: cmd+k now sends Ctrl+L; it was clear_screen.",) if platform_os == "macos" else ()
     )
-    return KeysPlan(f"keybind = {trigger}=text:{escaped}", scan.reports, notes=notes)
+    return KeysPlan(f"keybind = {trigger}=text:{escaped}", reports, notes=notes)
 
 
 def _kitty_cwd(platform_os: str, text: str, path: Path) -> KeysPlan:

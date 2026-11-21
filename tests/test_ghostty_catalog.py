@@ -26,7 +26,7 @@ def test_ghostty_config_paths_cover_every_resolver_directory(tmp_path: Path) -> 
         assert {path.parent for path in ghostty_default_files(os_name, tmp_path, {})} <= paths
 
 
-def test_both_ghostty_appimage_methods_are_pinned_github_release_methods() -> None:
+def test_both_ghostty_appimage_tarball_methods_are_pinned_github_releases() -> None:
     ghostty = next(tool for tool in load_tools(REGISTRY) if tool.id == "ghostty")
     methods = [method for method in ghostty.methods if method.kind == "tarball"]
     assert len(methods) == 2

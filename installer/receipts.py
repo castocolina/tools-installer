@@ -965,10 +965,26 @@ def _leaf_matches(artifact: ReceiptArtifact, trees: Sequence[Path]) -> bool:
     return any(resolved.is_relative_to(tree) for tree in trees)
 
 
+def _missing_menu_leaf(artifact: ReceiptArtifact) -> bool:
+    # shortcut: shared leaf kind uses paths; use a distinct kind if other tools add optional leaves.
+    if artifact.type != "leaf" or os.path.lexists(artifact.path):
+        return False
+    path = artifact.path
+    share = Path.home() / ".local" / "share"
+    return path.is_relative_to(share) and (
+        (path.parent.name == "applications" and path.suffix == ".desktop")
+        or (path.is_relative_to(share / "icons" / "hicolor") and path.suffix == ".png")
+    )
+
+
 def drifted(receipt: Receipt, *, rehash: bool = False) -> tuple[ReceiptArtifact, ...]:
     """The receipt's artifacts that no longer match, in receipt order."""
     trees = _tree_paths(receipt.artifacts)
-    return tuple(a for a in receipt.artifacts if not matches(a, rehash=rehash, trees=trees))
+    return tuple(
+        a
+        for a in receipt.artifacts
+        if not _missing_menu_leaf(a) and not matches(a, rehash=rehash, trees=trees)
+    )
 
 
 def broken_drift(receipt: Receipt, *, rehash: bool = False) -> tuple[ReceiptArtifact, ...]:
@@ -983,6 +999,7 @@ def broken_drift(receipt: Receipt, *, rehash: bool = False) -> tuple[ReceiptArti
         artifact
         for artifact in receipt.artifacts
         if artifact.type not in ("dir", "tree")
+        and not _missing_menu_leaf(artifact)
         and not matches(artifact, rehash=rehash, trees=trees)
     )
 

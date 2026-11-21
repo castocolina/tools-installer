@@ -14,6 +14,7 @@ from typing import Final
 import pytest
 
 from installer.download import artifact_paths
+from installer.run import CommandError
 from installer.terminal_regions import GHOSTTY, GHOSTTY_KEYS, marker
 from tests import e2e_ghostty_driver as driver
 from tests.e2e_landing_driver import Failed, tool_by_id
@@ -164,6 +165,15 @@ def test_run_lifecycle_turns_a_step_error_into_its_failed_line_and_still_cleans_
     assert driver.run_lifecycle([], fail)[-1] == "TRACER_GHOSTTY_REMOVE_FAILED detail=boom"
 
 
+def test_run_lifecycle_reports_cleanup_command_error() -> None:
+    def fail() -> list[str]:
+        raise CommandError(["uninstall"], 1)
+
+    assert driver.run_lifecycle([], fail) == [
+        "TRACER_GHOSTTY_REMOVE_FAILED detail=command failed (1): uninstall"
+    ]
+
+
 def test_run_lifecycle_cleans_up_when_a_step_raises_something_unexpected() -> None:
     calls: list[str] = []
 
@@ -203,6 +213,8 @@ def test_a_failed_install_that_already_placed_a_file_is_removed_and_diagnosed(
         installed = driver.home_listing(tmp_path, tmp_path / "workspace")
         if delete:
             binary.unlink()
+            binary.parent.rmdir()
+            binary.parent.parent.rmdir()
         return [
             driver.remove_verdict(
                 "fuse",
@@ -224,7 +236,8 @@ def test_a_failed_install_that_already_placed_a_file_is_removed_and_diagnosed(
     assert lines[-1] == (
         "TRACER_GHOSTTY_REMOVE_OK mode=fuse"
         if delete
-        else "TRACER_GHOSTTY_REMOVE_FAILED detail=.local/bin/ghostty still present"
+        else "TRACER_GHOSTTY_REMOVE_FAILED detail=.local/ still present; "
+        ".local/bin/ still present; .local/bin/ghostty still present"
     )
 
 
@@ -340,7 +353,7 @@ def test_remove_verdict_expects_the_installers_state_record_and_its_removal() ->
     )
 
 
-def testrun_ghostty_does_not_wait_for_a_helper_that_keeps_the_output_open(
+def test_run_ghostty_does_not_wait_for_a_helper_that_keeps_the_output_open(
     tmp_path: Path,
 ) -> None:
     stand_in = tmp_path / "ghostty"
@@ -352,6 +365,18 @@ def testrun_ghostty_does_not_wait_for_a_helper_that_keeps_the_output_open(
     rc, stdout, _ = driver.run_ghostty(stand_in, tmp_path, scratch, "fuse", "--version")
     assert (rc, stdout.strip()) == (0, "Ghostty 1.4.0")
     assert time.monotonic() - started < 10
+
+
+def test_the_standard_empty_directories_stay_but_a_file_inside_is_residue() -> None:
+    dirs = [".local/share/applications/", ".local/share/icons/", ".local/share/tools-installer/"]
+    assert (
+        _state_record_verdict(["config", "binary", *dirs], ["config", *dirs])
+        == "TRACER_GHOSTTY_REMOVE_OK mode=fuse"
+    )
+    leftover = ".local/share/applications/com.mitchellh.ghostty.desktop"
+    assert "still present" in _state_record_verdict(
+        ["config", "binary", *dirs, leftover], ["config", *dirs, leftover]
+    )
 
 
 def test_remove_verdict_is_independent_of_listing_order() -> None:
@@ -383,7 +408,13 @@ def test_seed_user_content_writes_a_user_line_and_a_theme_file(tmp_path: Path) -
     }
     assert driver.current_content(tmp_path, seeded) == seeded
     assert driver.seed_user_content(tmp_path) == seeded
-    assert driver.home_listing(tmp_path, tmp_path / "none") == sorted(seeded)
+    assert driver.home_listing(tmp_path, tmp_path / "none") == [
+        ".config/",
+        ".config/ghostty/",
+        ".config/ghostty/config.ghostty",
+        ".config/ghostty/themes/",
+        ".config/ghostty/themes/user-theme",
+    ]
 
 
 def test_current_content_reads_text_or_none(tmp_path: Path) -> None:
@@ -396,13 +427,51 @@ def test_current_content_reads_text_or_none(tmp_path: Path) -> None:
     }
 
 
-def test_home_listing_skips_empty_dirs_and_the_workspace(tmp_path: Path) -> None:
+def test_home_listing_records_empty_dirs_but_skips_the_workspace(tmp_path: Path) -> None:
     (tmp_path / "workspace").mkdir()
     (tmp_path / "workspace/x").touch()
     (tmp_path / "empty").mkdir()
     (tmp_path / "a").touch()
     (tmp_path / "link").symlink_to(tmp_path / "a")
-    assert driver.home_listing(tmp_path, tmp_path / "workspace") == ["a", "link"]
+    before = driver.home_listing(tmp_path, tmp_path / "workspace")
+    assert before == ["a", "empty/", "link"]
+    assert driver.leftovers(before, before, []) == []
+
+
+def test_remove_verdict_reports_a_new_empty_directory_left_behind(tmp_path: Path) -> None:
+    before = driver.home_listing(tmp_path, tmp_path / "workspace")
+    (tmp_path / "empty").mkdir()
+    installed = driver.home_listing(tmp_path, tmp_path / "workspace")
+    line = driver.remove_verdict(
+        "fuse",
+        before=before,
+        installed=installed,
+        after=installed,
+        allowed=[],
+        tmp_left=[],
+        receipt_left=False,
+        receipt_paths=[],
+        region_files=[],
+        seeded={},
+        current={},
+    )
+    assert "empty/ still present" in line
+
+
+def test_failed_tmp_inspection_is_a_removal_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(path: object) -> list[str]:
+        del path
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(driver.os, "listdir", fail)
+
+    def cleanup() -> list[str]:
+        driver.inspect_tmp()
+        return []
+
+    lines = driver.run_lifecycle([], cleanup)
+    assert "TRACER_GHOSTTY_REMOVE_FAILED" in lines[0]
+    assert "/tmp" in lines[0] and "permission denied" in lines[0]
 
 
 def test_allowed_prefixes_strip_comments_and_blanks() -> None:

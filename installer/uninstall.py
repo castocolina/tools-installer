@@ -181,7 +181,7 @@ def _receipt_proof(
     if tool.retired:
         # D-07: a retired tool declares no method, so the registry formula is replaced by the
         # shape of what install itself places. The drift check above still runs first.
-        mine = [a for a in receipt.artifacts if a.path not in claimed]
+        mine = [a for a in receipt.artifacts if a.path not in claimed and _exists(a.path)]
         links = {
             a.path.name: a.path
             for a in mine
@@ -198,7 +198,7 @@ def _receipt_proof(
         if method.kind == receipt.method.kind
         for artifact in artifact_paths(method, default_bin_dir)
     }
-    return tuple(a for a in receipt.artifacts if (a.path, a.type) in allowed)
+    return tuple(a for a in receipt.artifacts if (a.path, a.type) in allowed and _exists(a.path))
 
 
 # A removal captures a directory under a unique sibling of its own before

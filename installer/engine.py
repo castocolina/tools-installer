@@ -140,8 +140,8 @@ def _perform(method: Method, ctx: ExecContext) -> tuple[bool, str | None, tuple[
 
     Returns ``(verified, unverified_reason, notes)``. `notes` are row notes the
     install carries to `postinstall_warning`; a source build and a download's note can supply them.
-    A source build is
-    never sha256-verified and its failures raise like every executor's. `verified` is True when
+    A source build is never sha256-verified and its failures raise like every executor's.
+    `verified` is True when
     the download was sha256-verified (non-download methods are never marked
     verified — their package managers do their own checks; pinned or declared
     app zips are sha256-verified).

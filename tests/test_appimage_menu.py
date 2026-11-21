@@ -373,6 +373,51 @@ def test_removal_covers_the_binary_and_both_leaves(
     assert not any(p.exists() for p in (binary, desktop, icon)) and receipts.read("ghostty") is None
 
 
+@pytest.mark.parametrize("missing", [1, 2])
+def test_missing_menu_leaf_preserves_removal_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: int
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tool = ghostty_tool()
+    assert run_engine(tool, InstallRunner()).status is InstallStatus.INSTALLED
+    binary, desktop, icon = paths(tmp_path)
+    paths(tmp_path)[missing].unlink()
+    receipt = receipts.read("ghostty")
+    assert receipt is not None
+    assert receipts.broken_drift(receipt) == ()
+    assert receipts.drifted(receipt) == ()
+    plan = uninstall.removal_plan(tool, binary.parent, verify=True)
+    assert set(plan.removable) == ({binary, icon} if missing == 1 else {binary, desktop})
+    removed, refused = uninstall.remove_proven([tool], list(plan.removable), binary.parent)
+    assert set(removed) == set(plan.removable) and not refused
+    assert receipts.read("ghostty") is None
+
+
+def test_missing_non_menu_leaf_is_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    leaf = receipts.ReceiptArtifact(tmp_path / ".local/bin/missing", "leaf")
+    receipt = replace(previous(tmp_path), artifacts=(leaf,))
+    assert receipts.broken_drift(receipt) == (leaf,)
+    assert receipts.drifted(receipt) == (leaf,)
+
+
+@pytest.mark.parametrize("index", [1, 2])
+def test_menu_leaf_replaced_by_directory_is_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, index: int
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    tool = ghostty_tool()
+    assert run_engine(tool, InstallRunner()).status is InstallStatus.INSTALLED
+    path = paths(tmp_path)[index]
+    path.unlink()
+    path.mkdir()
+    receipt = receipts.read("ghostty")
+    assert receipt is not None
+    artifact = next(a for a in receipt.artifacts if a.path == path)
+    assert receipts.broken_drift(receipt) == (artifact,)
+    assert receipts.drifted(receipt) == (artifact,)
+
+
 def test_plan_uninstall_ignores_a_users_own_desktop_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

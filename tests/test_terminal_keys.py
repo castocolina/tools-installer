@@ -473,6 +473,8 @@ def test_ghostty_default_files_follow_load_order(tmp_path: Path) -> None:
         ("ctrl+shift+k=reset", "ctrl+shift+k"),
         ("Shift+Control+K=reset", "ctrl+shift+k"),
         ("control+shift+key_k=text:x", "ctrl+shift+k"),
+        ("ctrl+shift+physical:k=reset", "ctrl+shift+k"),
+        ("shift+ctrl+unicode:k=reset", "ctrl+shift+k"),
         ("all:performable:ctrl+shift+k=reset", "ctrl+shift+k"),
         ("cmd+k=clear_screen", "super+k"),
         ("command+k=x", "super+k"),
@@ -613,6 +615,20 @@ def test_ghostty_golden_macos_created_file() -> None:
     assert _ghostty_config("macos").read_text() == _GHOSTTY_MACOS
 
 
+@pytest.mark.parametrize("platform", [_MACOS, _LINUX], ids=["macos", "linux"])
+def test_ghostty_include_is_reported_only_by_macos_keys(platform: Platform) -> None:
+    path = _ghostty_config(platform.os)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("config-file = extra.conf\n")
+    result = run_post_install(_ghostty(), platform)
+    warning = "ghostty: partial: you include other files (config-file); they are not followed"
+    assert (warning in result.lines) == (platform.os == "macos")
+    assert path.read_text() == (
+        (_GHOSTTY_MACOS if platform.os == "macos" else _GHOSTTY_LINUX)
+        + "config-file = extra.conf\n"
+    )
+
+
 def test_ghostty_never_writes_a_global_alt_switch() -> None:
     for platform in (_LINUX, _MACOS):
         run_post_install(_ghostty(), platform)
@@ -659,6 +675,17 @@ def test_ghostty_user_chord_is_kept_and_reported(platform: str, index: int) -> N
         in result.lines
     )
     assert (_state_dir() / "terminal-tuning-ghostty").exists()
+
+
+def test_ghostty_legacy_physical_chord_is_kept_and_reported() -> None:
+    legacy, target = ghostty_default_files("fedora", Path.home(), os.environ)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("keybind = ctrl+shift+physical:k=reset\n")
+    target.write_text("font-size = 12\n")
+    result = run_post_install(_ghostty(), _LINUX)
+    assert "ghostty: partial: you already bind ctrl+shift+k" in result.lines
+    assert target.read_text() == "font-size = 12\n"
+    assert legacy.read_text() == "keybind = ctrl+shift+physical:k=reset\n"
 
 
 @pytest.mark.parametrize("value", ["clear", ""])

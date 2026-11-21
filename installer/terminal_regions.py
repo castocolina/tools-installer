@@ -442,6 +442,9 @@ def validate_kitty(text: str) -> None:
 GHOSTTY = "ghostty"
 GHOSTTY_KEYS = "ghostty-keys"
 GHOSTTY_CREATED = "terminal-ghostty-created"
+GHOSTTY_INCLUDE_REPORT = (
+    "ghostty: partial: you include other files (config-file); they are not followed"
+)
 
 
 def _nonempty_file(path: Path) -> bool:
@@ -493,9 +496,8 @@ def ghostty_chord(binding: str) -> str | None:
         return None
     parts = trigger.split("+")
     aliases = {"cmd": "super", "command": "super", "opt": "alt", "option": "alt", "control": "ctrl"}
-    return "+".join(
-        (*sorted(aliases.get(part, part) for part in parts[:-1]), parts[-1].removeprefix("key_"))
-    )
+    key = parts[-1].removeprefix("physical:").removeprefix("unicode:").removeprefix("key_")
+    return "+".join((*sorted(aliases.get(part, part) for part in parts[:-1]), key))
 
 
 @dataclass(frozen=True)

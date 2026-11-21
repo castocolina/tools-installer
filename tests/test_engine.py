@@ -32,6 +32,7 @@ from tests.test_download import fixture_runner
 def test_ghostty_installs_on_linux_x86_64_through_the_engine(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """The stub cannot extract menu files, so the install records a nonfatal menu note."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     _patch_not_installed(monkeypatch)
     tool = next(t for t in load_tools(Path("installer/registry.toml")) if t.id == "ghostty")
@@ -53,6 +54,7 @@ def test_ghostty_installs_on_linux_x86_64_through_the_engine(
     assert (
         outcome.postinstall_warning is not None and "community build" in outcome.postinstall_warning
     )
+    assert "could not add the application menu entry" in outcome.postinstall_warning
     receipt = receipts.read("ghostty")
     assert receipt is not None
     assert len(receipt.artifacts) == 1

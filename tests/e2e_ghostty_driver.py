@@ -15,12 +15,13 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
+from typing import Final
 
 from installer import platform as host_platform
 from installer import receipts
 from installer.download import artifact_paths
 from installer.model import Method
-from installer.run import run_command
+from installer.run import CommandError, run_command
 from installer.terminal_regions import GHOSTTY, GHOSTTY_KEYS, ghostty_config_path, marker
 from installer.terminal_shell import sync_terminal_shells
 from tests.e2e_landing_driver import (
@@ -37,6 +38,12 @@ TOOL_ID = "ghostty"
 ALLOWLIST = Path("scripts") / "e2e-residue-allowlist.txt"
 RUN_SECONDS = 120.0
 MOUNT_SECONDS = 15.0
+# The standard data directories the menu entry and icon go into, and the installer's own state
+# directory, stay as empty directories after the uninstall: a file left inside is still reported
+# on its own, and 30 D-17 keeps documented config in place.
+STANDARD_EMPTY_DIRS: Final = frozenset(
+    {".local/share/applications/", ".local/share/icons/", ".local/share/tools-installer/"}
+)
 
 
 def pass_environment(mode: str, environ: Mapping[str, str]) -> dict[str, str]:
@@ -89,7 +96,7 @@ def run_lifecycle(
             lines.extend(cleanup())
         except Failed as exc:
             lines.append(verdict(exc.prefix, exc.detail))
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, CommandError) as exc:
             lines.append(verdict("TRACER_GHOSTTY_REMOVE_FAILED", first_line(exc)))
     return lines
 
@@ -236,7 +243,9 @@ def leftovers(before: Sequence[str], after: Sequence[str], allowed: Sequence[str
         path
         for path in set(after) - set(before)
         if not any(
-            path == entry or path.startswith(entry + "/") or entry.startswith(path + "/")
+            path.rstrip("/") == entry.rstrip("/")
+            or path.startswith(entry.rstrip("/") + "/")
+            or entry.startswith(path.rstrip("/") + "/")
             for entry in allowed
         )
     )
@@ -269,12 +278,17 @@ def remove_verdict(
     problems = [
         f"{path} appeared after the install and is neither a receipt path nor a region file"
         for path in leftovers(before, installed, allowed)
-        if path not in expected
+        if path not in expected and not path.endswith("/")
     ]
     problems.extend(
         f"{path} is missing after the install" for path in sorted(expected - set(installed))
     )
-    remaining = leftovers(before, after, allowed)
+    remaining = [
+        path
+        for path in leftovers(before, after, allowed)
+        if path not in STANDARD_EMPTY_DIRS
+        and not (path.endswith("/") and any(name.startswith(path) for name in seeded))
+    ]
     problems.extend(f"{path} still present" for path in remaining[:10])
     if len(remaining) > 10:
         problems.append(f"and {len(remaining) - 10} more")
@@ -308,6 +322,8 @@ def home_listing(home: Path, workspace: Path) -> list[str]:
                 dirs.remove(name)
             elif path == workspace:
                 dirs.remove(name)
+            else:
+                result.append(path.relative_to(home).as_posix() + "/")
         result.extend((base / name).relative_to(home).as_posix() for name in files)
     return sorted(result)
 
@@ -340,6 +356,13 @@ def allowed_prefixes(text: str) -> list[str]:
 
 def tmp_leftovers(names: Sequence[str]) -> list[str]:
     return sorted(name for name in names if name.startswith("tools-installer-"))
+
+
+def inspect_tmp() -> list[str]:
+    try:
+        return tmp_leftovers(os.listdir("/tmp"))
+    except OSError as exc:
+        raise OSError(f"could not inspect /tmp: {exc}") from exc
 
 
 def _ghostty_env(home: Path, scratch: Path, mode: str) -> dict[str, str]:
@@ -461,10 +484,7 @@ def _lifecycle(mode: str) -> list[str]:
             installed = home_listing(home, Path.cwd())
             uninstall_one(tool_by_id(TOOL_ID), run_command)
             after = home_listing(home, Path.cwd())
-            try:
-                tmp_left = tmp_leftovers(os.listdir("/tmp"))
-            except OSError:
-                tmp_left = []
+            tmp_left = inspect_tmp()
             return [
                 remove_verdict(
                     mode,

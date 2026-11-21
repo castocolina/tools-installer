@@ -2380,7 +2380,8 @@ def test_ghostty_entry_records_the_container_proof() -> None:
         comments.append(line)
     text = "\n".join(reversed(comments))
     assert len(comments) <= 40
-    assert re.search(r"# Verified \d{4}-\d{2}-\d{2}: the ghostty container target", text)
+    assert re.search(r"# Verified \d{4}-\d{2}-\d{2}: scripts/container-e2e-verify.sh ghostty", text)
+    assert ".e2e-artifacts/" not in text
     for phrase in ("extract-and-run", "read both regions back", "removed everything it placed"):
         assert phrase in text
     cases = (

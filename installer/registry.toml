@@ -3198,12 +3198,12 @@ package = "alacritty"
 # The desktop id names the AppImage's own desktop file and icon;
 # the installer places the AppImage menu entry and icon
 # and the rendered entry drops X-KDE-Shortcuts=Ctrl+Alt+T to keep Konsole's Bazzite shortcut.
-# Verified 2026-11-20: the ghostty container target (scripts/container-e2e-verify.sh ghostty)
+# Verified 2026-11-20: scripts/container-e2e-verify.sh ghostty
 # installed the pinned AppImage in Fedora with zsh, fuse, fuse3 and the ostree marker;
 # extract-and-run proven in a container; the FUSE mount is checked on a Bazzite host (UAT).
 # Real Ghostty read both regions back: command = <zsh> -l and keybind = ctrl+shift+k=text:\x0c.
-# Uninstall removed everything it placed; the residue diff held only allowlisted paths.
-# Transcript: .e2e-artifacts/container-ghostty/ghostty-transcript.log
+# Uninstall removed everything it placed (the empty standard data directories and the installer's
+# state directory stay); the residue diff held only allowlisted paths.
 [[tool]]
 id = "ghostty"
 name = "Ghostty"
