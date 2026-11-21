@@ -747,3 +747,16 @@ Plans:
 - the menu leaves are told apart from other receipt leaves by path (a distinct artifact kind would be cleaner);
 - community rebuild tags such as `v1.4.0+1` cannot be expressed with one `{ver}` template, and bump tooling ignores build metadata.
 **Depends on:** Phase 30.
+
+### Phase 999.31: iTerm2 and herdr-app onboarding follow-ups (BACKLOG)
+
+**Goal:** The JSON-mode terminal entries lose the rough edges the phase 31 reviews accepted, without changing what is written for any row.
+**Requirements:** TBD
+**Source:** Phase 31 review disposition `31-REVIEW-DISPOSITION.md` and the plan reviews `31-REVIEWS.md`, accepted or deferred items:
+- the per-key ownership record is a single-path ledger: a keys-path change drops the old path's ownership proof, and a stale created marker bound to the old path makes strip return early for the new file (keep a ledger per path);
+- the symlink check is separate from the read, write and delete that re-resolve the path (a no-follow operation), and a symlinked parent directory is not refused;
+- the new ownership variants write the file before the created marker and the ledger, as `commit_region` does for region rows (recovery for an interrupted write);
+- the generic owned-keys apply special-cases `tool_id == "herdr-app"` next to `row.validate`, and the removal hook and the herdr-app paths use `Path.home()` and `HOST_SETTINGS_OS` instead of the injected values;
+- strip deletes the iTerm2 profile file on marker and GUID proof even if the user appended a second profile to it;
+- the stale `switched` record after a two-failure sequence (restore succeeds, record update fails, cask removal fails) heals only on reinstall.
+**Depends on:** Phase 31.
