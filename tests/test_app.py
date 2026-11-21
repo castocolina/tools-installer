@@ -9,7 +9,8 @@ from typing import Any, TypedDict, cast
 import pytest
 from rich.console import Console
 
-from installer import shellrc
+import installer.app as app_module
+from installer import bun_globals, postinstall, receipts, shellrc, version_status
 from installer.app import UninstallDecision, run_wizard
 from installer.checksums import ChecksumMismatch
 from installer.cli import Options
@@ -25,6 +26,7 @@ from installer.run import CommandError, Runner
 from installer.session import (
     InstallFn,
     MismatchChoice,
+    PlanRow,
     build_plan,
     exit_code,
 )
@@ -37,6 +39,7 @@ from tests.launch_doubles import stub_launch
 from tests.state_doubles import (
     FrozenStateService,
     ScriptedUpdates,
+    frozen_service,
     offline_service,
     plan_state,
     presence_service,
@@ -65,6 +68,148 @@ def _platform() -> Platform:
 def _console() -> tuple[Console, io.StringIO]:
     buf = io.StringIO()
     return Console(file=buf, width=100, no_color=True), buf
+
+
+def _no_playwright_probe(_argv: list[str]) -> str | None:
+    return None
+
+
+def _consent_playwright(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hosts: frozenset[str]
+) -> tuple[Tool, FrozenStateService]:
+    method = Method(
+        kind="bun", params={"npm_pkg": "@playwright/mcp", "versions": {"@playwright/mcp": "0.0.85"}}
+    )
+    tool = Tool(
+        id="playwright-mcp",
+        name="Playwright",
+        category="ai",
+        cmd="playwright-mcp",
+        methods=(method,),
+        postinstall="playwright-mcp-register",
+    )
+    bunx = tmp_path / "bunx"
+    bunx.write_text("fake", encoding="utf-8")
+    bunx.chmod(0o755)
+    monkeypatch.setattr(bun_globals, "resolve_bun", lambda: str(tmp_path / "bun"))
+    receipts.write(
+        receipts.Receipt(
+            tool=tool.id,
+            at="2026-11-07T00:00:00+00:00",
+            method=receipts.ReceiptMethod(kind="bun", key="test"),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks={"playwright-mcp-register": ()},
+        )
+    )
+    fact = vars(version_status)["_hook_fact"](
+        tool, receipts.read(tool.id), hosts, None, "/fake/playwright-mcp", _no_playwright_probe
+    )
+    refresh = frozen_service(Path.home(), platform=_platform())
+    refresh.publish(
+        [
+            plan_state(
+                tool,
+                platform=_platform(),
+                health=Health.MISCONFIGURED,
+                reasons=fact.misconfigured,
+                unconfigured=fact.steps,
+            )
+        ]
+    )
+    return tool, refresh
+
+
+def test_a_declined_plan_writes_nothing_and_yes_is_the_consent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (Path.home() / ".claude").mkdir()
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude"}))
+    tool, refresh = _consent_playwright(tmp_path, monkeypatch, frozenset({"claude"}))
+    declined = FakePrompter(False)
+    result = run_wizard(
+        [tool],
+        declined,
+        _console()[0],
+        Options(all=True, categories=(), yes=False),
+        refresh=refresh,
+        updates=ScriptedUpdates({}),
+        runner=_runner,
+    )
+    assert result is None and declined.questions == ["Run this plan?"]
+    assert not (Path.home() / ".claude.json").exists()
+    assert not (Path.home() / ".claude" / "settings.json").exists()
+    accepted = FakePrompter(False)
+    result = run_wizard(
+        [tool],
+        accepted,
+        _console()[0],
+        Options(all=True, categories=(), yes=True),
+        refresh=refresh,
+        updates=ScriptedUpdates({}),
+        runner=_runner,
+    )
+    assert result is not None and result[0].result == "done" and accepted.questions == []
+    assert "playwright" in json.loads((Path.home() / ".claude.json").read_text())["mcpServers"]
+
+
+@pytest.mark.parametrize("yes", (False, True))
+def test_a_claude_host_that_appears_after_the_confirmation_is_not_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, yes: bool
+) -> None:
+    tool, refresh = _consent_playwright(tmp_path, monkeypatch, frozenset({"codex"}))
+    monkeypatch.setattr(
+        postinstall,
+        "present_hosts",
+        lambda: (
+            frozenset({"codex", "claude"})
+            if (Path.home() / ".claude").exists()
+            else frozenset({"codex"})
+        ),
+    )
+    console, output = _console()
+
+    class LatePrompter(FakePrompter):
+        def confirm(self, message: str, *, default: bool = True) -> bool:
+            assert "codex" in output.getvalue()
+            (Path.home() / ".claude").mkdir()
+            return super().confirm(message, default=default)
+
+    if yes:
+        render = app_module.render_plan
+
+        def render_then_add_host(rows: Sequence[PlanRow], console: Console) -> None:
+            render(rows, console)
+            (Path.home() / ".claude").mkdir()
+
+        monkeypatch.setattr(app_module, "render_plan", render_then_add_host)
+    result = run_wizard(
+        [tool],
+        LatePrompter(True),
+        console,
+        Options(all=True, categories=(), yes=yes),
+        refresh=refresh,
+        updates=ScriptedUpdates({}),
+        runner=_runner,
+    )
+    assert result is not None and result[0].result == "done"
+    assert result[0].row.steps[0].hosts == ("codex",)
+    assert "appeared after you confirmed" in result[0].detail
+    assert (Path.home() / ".codex" / "config.toml").exists()
+    assert not (Path.home() / ".claude.json").exists()
+    assert not (Path.home() / ".claude" / "settings.json").exists()
+    receipt = receipts.read(tool.id)
+    assert receipt is not None and receipt.hooks["playwright-mcp-register"] == ("codex",)
+    fact = vars(version_status)["_hook_fact"](
+        tool,
+        receipt,
+        frozenset({"claude", "codex"}),
+        None,
+        "/fake/playwright-mcp",
+        _no_playwright_probe,
+    )
+    assert fact.steps[0].hosts == ("claude",) and "~/.claude.json" in fact.steps[0].text
 
 
 _BATCH_QUESTION = "Run this plan?"

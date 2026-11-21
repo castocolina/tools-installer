@@ -1,5 +1,6 @@
 import inspect
 import io
+import json
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import replace
@@ -11,7 +12,7 @@ from rich.console import Console
 
 import installer.engine as engine
 import installer.session as session_module
-from installer import agent_settings, executors, postinstall, receipts
+from installer import agent_settings, bun_globals, executors, postinstall, receipts, version_status
 from installer.engine import ChecksumPolicy, InstallOutcome
 from installer.enums import InstallStatus
 from installer.legacy_guard import REDIRECT_SENTINEL
@@ -47,7 +48,7 @@ from installer.session import (
 from installer.update import UpdateOutcome, UpdateService
 from installer.versions import TagResolver
 from tests.launch_doubles import stub_launch
-from tests.state_doubles import RunRecorder, ScriptedUpdates
+from tests.state_doubles import RunRecorder, ScriptedUpdates, plan_state
 
 
 def _tool(tool_id: str, priority: str = "P3", *, requires: tuple[str, ...] = ()) -> Tool:
@@ -793,6 +794,144 @@ def _codegraph_receipt(hooks: Mapping[str, tuple[str, ...]]) -> None:
 
 
 _REGISTER_CODEX = ConfigStep("register codegraph for codex", "hook_register")
+
+
+def _playwright_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Tool:
+    method = Method(
+        kind="bun", params={"npm_pkg": "@playwright/mcp", "versions": {"@playwright/mcp": "0.0.85"}}
+    )
+    tool = Tool(
+        id="playwright-mcp",
+        name="Playwright",
+        category="ai",
+        cmd="playwright-mcp",
+        methods=(method,),
+        postinstall="playwright-mcp-register",
+    )
+    bunx = tmp_path / "bunx"
+    bunx.write_text("fake", encoding="utf-8")
+    bunx.chmod(0o755)
+    monkeypatch.setattr(bun_globals, "resolve_bun", lambda: str(tmp_path / "bun"))
+    receipts.write(
+        receipts.Receipt(
+            tool=tool.id,
+            at="2026-11-07T00:00:00+00:00",
+            method=receipts.ReceiptMethod(kind="bun", key="test"),
+            package=None,
+            artifacts=(),
+            smoke=None,
+            hooks={tool.postinstall or "": ()},
+        )
+    )
+    return tool
+
+
+def _playwright_probe(_argv: list[str]) -> str | None:
+    return None
+
+
+def _playwright_row(tool: Tool, hosts: frozenset[str]) -> PlanRow:
+    fact = vars(version_status)["_hook_fact"](
+        tool, receipts.read(tool.id), hosts, None, "/fake/playwright-mcp", _playwright_probe
+    )
+    state = plan_state(
+        tool,
+        platform=_platform(),
+        health=version_status.Health.MISCONFIGURED,
+        reasons=fact.misconfigured,
+        unconfigured=fact.steps,
+    )
+    return session_module.build_plan(
+        [tool.id], [tool], lambda _id: state, _platform(), reinstall=frozenset()
+    )[0]
+
+
+def test_the_hook_register_step_is_the_claude_consent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = _playwright_setup(tmp_path, monkeypatch)
+    (Path.home() / ".claude").mkdir()
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude"}))
+    row = _playwright_row(tool, frozenset({"claude"}))
+    assert row.disposition is Disposition.RECONFIGURE and row.steps[0].hosts == ("claude",)
+    assert not (Path.home() / ".claude.json").exists()
+    assert not (Path.home() / ".claude" / "settings.json").exists()
+    outcome = execute_plan([row], _run_context(RunRecorder(), catalog={tool.id: tool}))[0]
+    assert outcome.result == "done"
+    assert "playwright" in json.loads((Path.home() / ".claude.json").read_text())["mcpServers"]
+    receipt = receipts.read(tool.id)
+    assert receipt is not None and "claude" in receipt.hooks["playwright-mcp-register"]
+
+
+def test_install_row_hands_off_claude_without_writing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = _playwright_setup(tmp_path, monkeypatch)
+    (Path.home() / ".claude").mkdir()
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"claude"}))
+
+    def perform(_method: Method, _ctx: object) -> tuple[bool, str | None, tuple[str, ...]]:
+        return False, None, ()
+
+    def smoke(_method: Method, _tool: Tool) -> bool:
+        return False
+
+    monkeypatch.setattr(engine, "_perform", perform)
+    monkeypatch.setattr(engine, "_run_manager_smoke", smoke)
+    missing = plan_state(tool, platform=_platform(), health=version_status.Health.MISSING)
+    row = session_module.build_plan(
+        [tool.id], [tool], lambda _id: missing, _platform(), reinstall=frozenset()
+    )[0]
+    assert row.disposition is Disposition.INSTALL and row.steps == ()
+
+    def install(
+        tool: Tool,
+        platform: Platform,
+        runner: Runner,
+        resolve_tag: TagResolver,
+        *,
+        checksum_policy: ChecksumPolicy = "fail",
+    ) -> InstallOutcome:
+        return engine.install_tool(
+            tool,
+            platform,
+            runner,
+            resolve_tag,
+            checksum_policy=checksum_policy,
+            present=lambda _tool: False,
+        )
+
+    context = replace(_run_context(RunRecorder(), catalog={tool.id: tool}), install=install)
+    outcome = execute_plan([row], context)[0]
+    assert outcome.result == "done" and outcome.install is not None
+    assert (
+        outcome.install.postinstall_warning is not None
+        and "claude mcp add" in outcome.install.postinstall_warning
+    )
+    assert not (Path.home() / ".claude.json").exists()
+    assert not (Path.home() / ".claude" / "settings.json").exists()
+
+
+def test_a_claude_host_that_appears_after_the_confirmation_is_not_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = _playwright_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(postinstall, "present_hosts", lambda: frozenset({"codex", "claude"}))
+    row = _playwright_row(tool, frozenset({"codex"}))
+    assert row.steps[0].hosts == ("codex",)
+    (Path.home() / ".claude").mkdir()
+    outcome = execute_plan([row], _run_context(RunRecorder(), catalog={tool.id: tool}))[0]
+    assert outcome.result == "done" and "appeared after you confirmed" in outcome.detail
+    assert (Path.home() / ".codex" / "config.toml").exists()
+    assert not (Path.home() / ".claude.json").exists()
+    assert not (Path.home() / ".claude" / "settings.json").exists()
+    receipt = receipts.read(tool.id)
+    assert receipt is not None and receipt.hooks["playwright-mcp-register"] == ("codex",)
+    fresh = _playwright_row(tool, frozenset({"codex", "claude"}))
+    assert fresh.steps[0].hosts == ("claude",)
+    assert (
+        "~/.claude.json" in fresh.steps[0].text and "~/.claude/settings.json" in fresh.steps[0].text
+    )
 
 
 def test_installing_copilot_registers_herdr_for_it(monkeypatch: pytest.MonkeyPatch) -> None:

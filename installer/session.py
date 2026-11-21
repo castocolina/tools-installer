@@ -328,7 +328,7 @@ def _first_line_of(text: str) -> str:
     return text.splitlines()[0]
 
 
-def _register_hook_step(tool: Tool, ctx: RunContext) -> _StepResult:
+def _register_hook_step(tool: Tool, ctx: RunContext, step: ConfigStep) -> _StepResult:
     """Register the present hosts the hook's receipt does not record, then record them (D-02).
 
     `register_hooks` already subtracts the recorded hosts and writes what it registered;
@@ -338,7 +338,9 @@ def _register_hook_step(tool: Tool, ctx: RunContext) -> _StepResult:
     method = hook_method(tool, receipt) if receipt is not None else None
     if receipt is None or method is None:
         return _StepResult(failed="no install receipt to record the hook in")
-    registered, warning = register_hooks(tool, method, ctx.runner)
+    registered, warning = register_hooks(
+        tool, method, ctx.runner, confirmed_hosts=frozenset(step.hosts) if step.hosts else None
+    )
     if registered:
         labels = host_labels(registered)
         note = f"registered for {labels}" if labels else "registered"
@@ -368,7 +370,7 @@ def _run_step(step: ConfigStep, tool: Tool, ctx: RunContext) -> _StepResult:
         # is the only answer that cannot run something nobody agreed to.
         return _StepResult(failed="step kind has no branch")
     if step.kind == "hook_register":
-        return _register_hook_step(tool, ctx)
+        return _register_hook_step(tool, ctx, step)
     if step.kind == "install_tuning":
         return _install_tuning_step(tool, ctx)
     if step.kind in {"terminal_sync", "zshenv_shell"}:
