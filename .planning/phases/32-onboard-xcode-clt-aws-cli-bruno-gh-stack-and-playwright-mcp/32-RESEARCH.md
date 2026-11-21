@@ -585,7 +585,9 @@ Check `unregister_hosts`/`unregister_argvs` tolerate `unregister=None` with `tar
 | A13 | Python 3.15 stdlib behavior matches 3.12 for the APIs used | Constraints | CI-only failure |
 | A14 | Bruno's Linux config dir is `~/.config/bruno` | Entry 3 | a config path that never exists (harmless) |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+Each question below was decided by the plans and the orchestrator decisions (`32-REVIEWS.md` and the plans' decision records, 2026-11-21): Q1 hosts via the settings ledger (pi named only), Q2 and Q4 consent through the existing `hook_register` step with the install-time hand-off, Q3 Xcode hand-off unconditional with update refused, Q5 Bruno keeps D-08 (no desktop entry, backlog 999.32), Q6 `GENERIC_SKIP_TOOLS` grows per container plan.
 
 1. **Q1: Which hosts get the Playwright server?**
    - Known: ledger-backed hosts are claude, codex, opencode, cursor-agent, copilot. Pi has no ledger. Antigravity and the other harnesses have no writer.
