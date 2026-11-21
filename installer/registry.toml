@@ -3530,3 +3530,84 @@ install = ["gh", "extension", "install", "https://github.com/github/gh-stack"]
 detect_path = "~/.local/share/gh/extensions/gh-stack/manifest.yml"
 paths = ["~/.local/share/gh/extensions/gh-stack/"]
 update = ["gh", "extension", "upgrade", "stack"]
+
+# Verified 2026-11-21: the script defaults to user-local XDG data and bin homes; never use --system.
+# Linux requires gpg and exits 1 if missing; env pins signature-skip false even if inherited true.
+# Brew awscli is the fallback; it is a separate install that aws update cannot update.
+# The same version exits 0 as a no-op; an older target exits 2. aws update verifies install.sh.sig with gpg.
+# ~/.aws holds credentials and is never an install or config path.
+# shortcut: custom XDG_DATA_HOME or XDG_BIN_HOME moves artifacts outside declared paths; upgrade when paths support expansion.
+# Env values are shell-quoted, so $HOME cannot be pinned. The macOS pkg uses installer -pkg -target
+# CurrentUserHomeDirectory without admin rights (assumed; Mac UAT required).
+# No requires: a failed tool-level unzip dependency blocks the ladder before brew; the vendor script
+# checks unzip on Linux and fails closed with its own message when absent (review H3).
+# Console children print errors directly; outcomes carry command and status, while TUI errors also
+# carry the last output lines (round 2 M1).
+[[tool]]
+id = "aws-cli"
+name = "AWS CLI"
+category = "dev"
+cmd = "aws"
+priority = "P3"
+audience = "both"
+tier = "user"
+verified = 2026-11-21
+desc = "AWS command line interface v2, installed with the official user-scope script."
+[[tool.method]]
+kind = "script"
+url = "https://awscli.amazonaws.com/v2/install.sh"
+shell = "bash"
+bin_dir = "~/.local/bin"
+env = { AWS_CLI_INSTALL_SKIP_SIGNATURE_VERIFICATION = "false" }
+prefer = true
+paths = ["~/.local/share/aws-cli/", "~/.local/bin/aws", "~/.local/bin/aws_completer"]
+update = ["aws", "update"]
+[[tool.method]]
+kind = "brew"
+formula = "awscli"
+
+# Verified 2026-11-21: v4.3.0 (2026-10-22) GitHub asset digests match these pins.
+# github_release takes no pins; pinned tarballs bump version, sha256 and verified together;
+# make verify-registry checks both. Arch has no official package (AUR only).
+# Cask 4.3.0 has no binary stanza; --appdir places the bundle in ~/Applications,
+# with no CLI link promised. brew uninstall --cask does not zap ~/Documents/bruno.
+# The bru CLI is out of scope (owner decision 2026-11-16).
+# Tarball desktop exists since phase 30, but D-08 writes no menu entry; follow-up 999.32.
+# smoke_argv stays default: FUSE 2, --no-sandbox and display-less smoke are unconfirmed
+# until plan 32-07's container check; UNPROVEN is not a pass. Plan 32-09 applies a
+# working argv, or retains the default and records the limit if unproven.
+# ~/.config/bruno is assumed from the Electron app name.
+[[tool]]
+id = "bruno"
+name = "Bruno"
+category = "dev"
+cmd = "bruno"
+priority = "P3"
+audience = "human"
+tier = "user"
+verified = 2026-11-21
+config_paths = ["~/.config/bruno", "~/Library/Application Support/bruno"]
+desc = "Open-source API client; Linux gets a pinned AppImage, macOS the cask."
+[[tool.method]]
+kind = "tarball"
+os = ["debian", "fedora", "arch"]
+arch = ["amd64"]
+url = "https://github.com/usebruno/bruno/releases/download/v{ver}/bruno_{ver}_x86_64_linux.AppImage"
+version = "4.3.0"
+sha256 = "3c386b1007f66d875c34a2a502063fbad65c66e37409a316ebe518788b1e80bb"
+member = "bruno"
+raw = true
+[[tool.method]]
+kind = "tarball"
+os = ["debian", "fedora", "arch"]
+arch = ["arm64"]
+url = "https://github.com/usebruno/bruno/releases/download/v{ver}/bruno_{ver}_arm64_linux.AppImage"
+version = "4.3.0"
+sha256 = "6048c3aeb76607c71df7558deea83cfef9d33cf24a63da9e7c5268ab19d13469"
+member = "bruno"
+raw = true
+[[tool.method]]
+kind = "cask"
+os = ["macos"]
+cask = "bruno"
+app = "Bruno.app"
