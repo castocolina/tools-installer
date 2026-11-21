@@ -306,3 +306,134 @@ The revised plans address several first-cycle findings, notably the applied-bump
 3. **The new tests predominantly inspect text.** They can establish wiring conventions, but cannot establish shell error handling, race behavior, or live GitHub protection. The runbook correctly carries some live work forward, but the failure cases above need executable regression coverage or an explicit, safe owner verification procedure.
 
 **Not checked:** No tests, containers, GitHub operations, or remote writes were run; no scratch files were created. GitHub protection behavior remains a live-proof risk, not an established result.
+
+
+## Lane Log (convergence cycle 3, plans at 861b70cc)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 14:57 | opencode-referee-one | one-shot probe | OK |
+| 14:57 to 15:03 | opencode-referee-one | real review through `gsd-tools query review-lane invoke`, background, 2700 s timeout, stdin `/dev/null`, prior findings supplied | exit 0, stderr empty |
+
+Failures this cycle: none. No other lane or model was used.
+
+## Orchestrator verification of the cycle 3 concerns
+
+Cycle 3 of 3: the cap. Real HIGH by cycle: 6, 5, now 5 distinct (second-order gaps in the previous round's fixes; two are plan-internal contradictions between a plan's workflow text and its own tests). The count is no longer falling: under the owner's cap rule this is the LAST revision and the run executes right after it, with no cycle 4; whatever the review gates find afterwards goes to the post-execution fix round. Plan-internal findings were checked against the cited lines; claims about Git behavior and the repository's push gate are for the planner to verify. DECISIONS apply exactly; all provisional.
+
+| Id | Claim | Judgment and DECISION |
+|---|---|---|
+| H1 (33-03) | The workflow text and its own tests contradict each other: the compare test wants the FIRST `expected=` after the fetch but the script initializes it earlier; the issue test bans apostrophes though the required `jq` filter is single-quoted (the drift workflow uses the same idiom); another test bans the word `token` in every run block though the required issue body says `write token` | Real plan-internal contradictions. DECISION: align the tests to the workflow, never the reverse: match the actual fetch assignment, allow single-quoted `jq` filters, and replace the `token` word ban by a credential-exposure test (no `secrets.` reference in a run block, no echo or print of `GH_TOKEN`, no `set -x`); ordinary security prose in the issue body stays. |
+| H2 (33-03) | `git ls-remote` patterns match ref tails at slash boundaries, so filtering by `refs/heads/bot/registry-*` does not prove each returned full ref starts with that prefix; a failed listing in a pipe can look like an empty cleanup | Real by the referee's reading of `git-ls-remote(1)`; planner verifies. DECISION: after listing, accept a ref only when its full name starts with exactly `refs/heads/bot/registry-` (a shell `case`), capture the listing without a pipe so its failure fails the step (and set `pipefail`), exclude the current branch, delete with the expected-SHA lease. |
+| M1 (33-03) | After a push that succeeded but a dispatch that failed, an identical rerun can redispatch CI but deletion still needs `same != 'true'`, so the one-branch policy is not restored; the redispatch treats any run for the SHA, even failed or cancelled, as enough | Real. DECISION: cleanup runs after a successful publish OR a successful redispatch; the redispatch counts only a queued, in-progress or successful run for the head (a failed or cancelled run triggers a new dispatch); test the texts. |
+| M2 (33-03) | The changed-file guard maps every nonzero `git diff --quiet` result to "changed", so a Git error fails open | Real. DECISION: capture the exit code: 0 means unchanged, 1 means changed, anything else fails the step; test the text. |
+| H3 (33-04) | The repository's push gate rejects any pushed commit other than the current `HEAD` (`devtools/push_gate.py:226-237`); Option A pushes `BASE` then `SHA` and Option B pushes `SHA`, but the runbook only fetches them | Real by the referee's reading; planner verifies. DECISION: every push of the runbook is made from a clean scratch worktree created with `git worktree add --detach <dir> <sha>` at exactly the commit being pushed (so `HEAD` is that commit), removed afterwards; never bypass the hook or the gate. |
+| H4 (33-04) | STOP paths can leave the proof's own work behind: a run crossing midnight after the pre-dispatch check creates a branch the runbook never looks up; a failed publish leaves an issue but no branch; Part 1 stops before `ISSUE` is captured, so cleanup misses it and the next preflight blocks | Real. DECISION: the preflight proves the namespace empty (no `bot/registry-*` ref, no open `registry-bot` issue), so cleanup removes whatever now exists in exactly that namespace without needing recorded names: every `bot/registry-*` ref (full-prefix check, expected-SHA lease from a fresh listing) and the open `registry-bot` issues present at cleanup were created by the proof, and the runbook says so; rollover and failed-publish leftovers are covered the same way. |
+| M3 (33-04) | The proof does not bind evidence to the dispatched run: `--limit 1` and `gh run watch` without an ID; "every run" without a nonempty result; and Option A's push triggers ordinary CI on the target ref, so the dispatch-only evidence must be captured before it | Real. DECISION: capture the dispatched run's id from `gh run list --workflow ci.yml --branch <bot> --json databaseId,headSha,event` filtered by head SHA and event `workflow_dispatch`, require it nonempty, watch it by id, record its two job results (both success) and the protection read-back BEFORE Option A's final push. |
+| H5 (33-05) | The documented landing command fetches a remote-tracking ref and pushes its SHA, but the push gate rejects a SHA that is not the checked-out `HEAD`; the guide must also verify the two named checks, not list a run | Real. DECISION: the landing text creates a clean worktree detached at the fetched SHA, verifies BOTH required check names concluded `success` on that SHA (through the check-runs of that commit), then pushes `HEAD:refs/heads/main` from that worktree. |
+| M4 (33-05) | The mutation exercise restores with `git checkout -- <path>`, which resets the tracked test file to the index and discards the uncommitted new tests; a dirty planned path is not proof of executor ownership | Real. DECISION: save the temporary mutation as a patch under the owned scratch directory and reverse exactly it with `git apply -R`; the new tests stay. Treat an unexpected edit to ANY path (planned or not) as user-owned: report it, never commit it. |
+| M5 (33-01) | A same-version, same-digest candidate can produce a date-only diff because the filter equates "applied" with a real bump | Real. DECISION: exclude a no-op candidate (version and digest equal to the current) from the flagged date set; add the regression. |
+| M6 (33-01) | The canonical registry guide still describes whole-entry verification (`.claude/architecture.md:226-230`) while the flag refreshes `verified` for a bumped tool whose neighbour still fails | Document the pin-only exception in the architecture guide as well as the help text, tracking issue body and README. |
+| X (cross) | Final gates with the default TMPDIR instead of an owned directory; `make validate` does not lint inline Actions scripts | X REJECTED a third time (the doctor test wraps its output by path length); the actionlint run stays an orchestrator-run phase-gate step recorded as "not run" if unavailable. |
+
+## OpenCode Review (opencode-referee-one), cycle 3
+
+Using the plan-review checklist and ponytail review to verify all five plans against the repository. I’ll use Codebase Memory to trace the verifier and check the proposed README guidance against the existing workflow. This is a read-only review.
+Two blockers are clear from the prescribed commands: plan 33-03 requires issue text that its own workflow test rejects, and plan 33-04 can stop before recording the branch or issue it needs to clean up.
+# Phase 33 plan review — convergence cycle 3
+
+### Document Type
+GSD · implementation plans
+
+### Status: Issues Found — revise and re-review
+
+The revisions fix several cycle-2 problems, including comparing the bot branch’s parent, using leases for branch deletion, and fetching the exact SHA before landing. **Do not execute the phase as written.** The workflow and its tests contradict each other, branch deletion is not confined to the claimed namespace, and the proof and landing instructions can be rejected by the repository’s own push gate.
+
+## 33-01
+
+**Summary.** Add `--bumps-only` at the registry edit boundary, preserving the unflagged path and testing both with offline fixtures.
+
+**Findings status.** The applied-bump date fix and multi-method coverage are retained. The plan now accurately says the flag can add a date that the unflagged path would not write. The persisted meaning of that date still needs one documentation correction.
+
+**Strengths.** Keeping the filter in the edit builder preserves the existing per-method version/hash pairing and the single write. Deriving dates from applied candidates also covers the case where an unpinned method still reports drift (`.planning/phases/33-registry-update-bot/33-01-PLAN.md:113–116,184–186`; `installer/verify_registry.py:1188–1216,1598–1613`; `tests/test_verify_registry.py:3405–3411`).
+
+**Concerns.**
+1. **MEDIUM — An explicit same-version candidate can still produce a date-only diff.** The filter at `.planning/phases/33-registry-update-bot/33-01-PLAN.md:113` equates `applied` with a real bump. The verifier accepts an explicit candidate without checking whether it equals the current version, and builds version/hash edits even when both values already match (`installer/verify_registry.py:1188–1198,1268–1272,1298–1326`). A passing same-version, same-digest candidate with an old date can therefore change only `verified`. Auto-discovery checks for a newer tag, so this gap affects the CLI contract rather than the bot’s normal discovery path (`installer/verify_registry.py:315–330`).
+2. **MEDIUM — The canonical registry guide still describes whole-entry verification.** The new CLI help documents pin-only certification (`.planning/phases/33-registry-update-bot/33-01-PLAN.md:156`), but `.claude/architecture.md:226–230` says a verification run refreshes the field when the entry passes. The planned `combo` behavior intentionally refreshes it when another method still fails.
+
+**Suggestions.** Add a same-version, same-digest regression and exclude no-op candidates from the flagged date set. Keep the chosen pin-only behavior, but document the exception in the canonical registry guide as well as the CLI help and README.
+
+**Risk Assessment.** Medium for the public flag contract; low for the edit mechanics and normal automatic bumps.
+
+## 33-02
+
+**Summary.** Add bare `workflow_dispatch` to CI, preserve the two required check names, and relax only the checkout version lookup.
+
+**Findings status.** The previous concern is addressed: file-level evidence is explicitly separated from live BOT-02 proof (`.planning/phases/33-registry-update-bot/33-02-PLAN.md:183–191`).
+
+**Strengths.** The trigger and checkout edits match the two existing assertions, while retaining the push filter and full-history checkout. The added tests preserve the existing job and matrix names and the per-ref concurrency group. The separate loader is appropriate because the drift test’s loader is hard-wired to its own file (`.planning/phases/33-registry-update-bot/33-02-PLAN.md:102–110,130–145`; `.github/workflows/ci.yml:5–27`; `tests/test_ci_workflow.py:36–53`; `tests/test_verify_registry_workflow.py:13–23`).
+
+**Concerns.** No new blocker. The generated names are an assertion about workflow structure, not proof that GitHub attached those checks to the bot’s SHA or accepted them under protection (`.planning/phases/33-registry-update-bot/33-02-PLAN.md:139–140,183–191`; `.planning/phases/33-registry-update-bot/33-SPEC.md:29–32`).
+
+**Suggestions.** Keep this plan narrow and retain `human_needed` for the live result.
+
+**Risk Assessment.** Low for the change; live dispatch acceptance remains unverified.
+
+## 33-03
+
+**Summary.** Add the dispatch-only bot, its guarded publication path, CI dispatch and recovery, issue tracking, and old-branch cleanup.
+
+**Findings status.** The stale-base comparison and suppressed-fetch-error findings are addressed in design. The plan adds expected-SHA deletion and failure reporting, but neither fully closes the underlying failure paths. The no-`main` wording is more accurate, although dispatch authorization is still overstated.
+
+**Strengths.** The direct `uv` command preserves the verifier’s exit categories instead of routing them through `make`. The remote probe distinguishes “absent” from a failed lookup, and the push is tied to the fetched SHA. The shared cache and unchanged read-only drift permissions match the existing workflow (`.planning/phases/33-registry-update-bot/33-03-PLAN.md:149–159`; `Makefile:27–28`; `installer/verify_registry.py:1506–1514`; `.github/workflows/verify-registry.yml:13–15,30–35,50–55`).
+
+**Concerns.**
+1. **HIGH — The prescribed workflow cannot pass its own tests.** The compare test requires the *first* `expected=` to follow the fetch, but the script initializes `expected=` before the probe. The issue test bans apostrophes while the prescribed `jq` filter uses them; another test bans the word `token` in every run block while the required issue body contains `write token` (`.planning/phases/33-registry-update-bot/33-03-PLAN.md:125,136,156,193,197,205`). The existing drift workflow uses the same legitimate single-quoted `jq` idiom (`.github/workflows/verify-registry.yml:45–48`).
+2. **HIGH — Leases protect the listed SHA, not the deletion namespace.** Git’s `ls-remote` patterns match ref *tails* at slash boundaries. Filtering the listing with `refs/heads/bot/registry-*` is therefore not equivalent to checking that each returned full ref starts with that prefix. The loop excludes only the current branch before passing the returned ref to `git push --delete`. Under the planned default `bash -e` without `pipefail`, a failed listing can also appear as a successful empty cleanup (`.planning/phases/33-registry-update-bot/33-03-PLAN.md:109,196,208`; local `git-ls-remote(1)`, `<patterns>`).
+3. **MEDIUM — A failed dispatch can leave stale branches indefinitely.** If the new push succeeds and dispatch fails, cleanup is skipped. On an identical rerun, `redispatch` can start CI successfully, but deletion still requires `same != 'true'`, so the successful recovery does not restore the one-branch policy. Separately, the recovery treats any run with the SHA, including a failed or cancelled run, as sufficient and provides no recovery guidance in that case (`.planning/phases/33-registry-update-bot/33-03-PLAN.md:158–159,207–208`; `.planning/phases/33-registry-update-bot/33-CONTEXT.md:32`).
+4. **MEDIUM — The changed-file guard fails open on a Git error.** The prescribed `if git diff --quiet …; then … else changed=true` maps every nonzero result to “changed.” Bash does not stop on a failed `if` condition, so an error can reach the issue step as if the verifier produced a real diff (`.planning/phases/33-registry-update-bot/33-03-PLAN.md:155,205`). That conflicts with the guarded-publication contract (`.planning/phases/33-registry-update-bot/33-SPEC.md:24–27`).
+
+**Suggestions.** Match the actual fetch assignment in the order test, and test for credential exposure rather than banning ordinary security prose or valid shell quotes. Check the full ref prefix before deletion, capture listing failure separately, and allow cleanup after successful CI recovery. Separate diff exit `1` from errors. Keep the no-`main` test as a structural guard; describe owner-only dispatch as an operating rule, not an enforced permission.
+
+**Risk Assessment.** High. The tests as specified block execution, and the deletion flaw affects repository refs even at the intended single-owner, weekly-run scale.
+
+## 33-04
+
+**Summary.** Deliver an owner-run, post-landing proof using real drift and a temporary protected target; keep the cron disabled until the proof passes.
+
+**Findings status.** The rejected stale-candidate recipe is gone. The revised proof identifies the bot commit, rejects push-event CI as evidence, and no longer lets an owner decision count as a pass. The midnight and cleanup fixes are incomplete, and the proof push instructions miss a local prerequisite.
+
+**Strengths.** Using real drift avoids the verifier’s deliberate rejection of an outdated candidate. The parent, author, and changed-file checks improve attribution, and Option A explicitly requires approval before changing temporary protection (`.planning/phases/33-registry-update-bot/33-04-PLAN.md:134–135,166–179`; `installer/verify_registry.py:315–330,1298–1315`). Keeping the runbook as text preserves the executor’s no-remote-write boundary.
+
+**Concerns.**
+1. **HIGH — Pushing by SHA does not satisfy the local push gate unless that SHA is checked out.** Option A pushes first `BASE`, then `SHA`; Option B also pushes `SHA`. The runbook only fetches these commits and asks for a clean checkout or scratch worktree. The installed gate rejects any pushed commit other than the current `HEAD`, so even a clean worktree cannot perform both Option A pushes as written (`.planning/phases/33-registry-update-bot/33-04-PLAN.md:132–134,178`; `devtools/hooks.py:1–5,17–27`; `devtools/push_gate.py:226–237,316–324`).
+2. **HIGH — STOP paths can leave the proof’s own work behind or delete a changed ref.** A run can cross midnight *after* the pre-dispatch check and create a branch the runbook never looks up. A failed publish can leave an issue but no branch because 33-03 creates the issue first. Part 1 stops before capturing `ISSUE` in either case, while cleanup deletes the original date’s branch by name and closes only the captured issue. The next preflight can then block on the proof’s own leftovers (`.planning/phases/33-registry-update-bot/33-04-PLAN.md:132–136,177`; `.planning/phases/33-registry-update-bot/33-03-PLAN.md:153,205–207`).
+3. **MEDIUM — The proof does not reliably bind evidence to the dispatched run.** `--limit 1` and `gh run watch` without an ID do not establish that the watched run is the one just dispatched. The CI checks are phrased as “every run” without an explicit nonempty result or an association between the reported check runs and the bot-dispatched CI run. Also, a successful Option A push triggers ordinary CI on the target ref, so the dispatch-only evidence must be captured **before** that push (`.planning/phases/33-registry-update-bot/33-04-PLAN.md:134–135,178–179`; `.github/workflows/ci.yml:3–7`).
+
+**Suggestions.** Use a clean scratch worktree checked out at each exact commit before its push; do not bypass the hook. Capture and watch both bot runs by ID, require at least one successful dispatched CI run on the exact SHA, and record its two job results and the protection read-back before Option A’s final push. Make cleanup conditional on artifacts verified to belong to that run, including failed-publish and date-rollover cases; leave a ref alone if it no longer points to the recorded SHA.
+
+**Risk Assessment.** High. The procedure is central to rollout, and its current failure paths can leave remote state that blocks a retry.
+
+## 33-05
+
+**Summary.** Add grouped weekly GitHub Actions updates, document owner landing, and verify agreement between the workflow and runbook.
+
+**Findings status.** The command-line extraction now excludes prose. The landing instructions select a fetched SHA, and the final status check no longer directs the executor to discard unrelated paths. Two remaining execution instructions undermine those fixes.
+
+**Strengths.** The Dependabot parse test pins the single ecosystem, root directory, weekly cadence, and group. The `.txt` and YAML paths need no classifier or Markdown-ledger changes, and the proposed guide insertion leaves the tested escape-hatch section intact (`.planning/phases/33-registry-update-bot/33-05-PLAN.md:117–123,154,187–191`; `devtools/docs_only.py:18–36`; `tests/test_docs_only.py:25–45,243,266`; `tests/test_docs.py:698–735`).
+
+**Concerns.**
+1. **HIGH — The documented landing command still fails from an ordinary maintainer checkout.** Fetching a remote-tracking ref and verifying its SHA does not move `HEAD`; the push gate will reject that SHA from a checkout at `main` or another branch. The guide also needs to verify the two named checks, not merely show a workflow-run list for the commit (`.planning/phases/33-registry-update-bot/33-05-PLAN.md:154`; `devtools/push_gate.py:226–237`; `.claude/git-workflow.md:35–45`).
+2. **MEDIUM — The mutation exercise can erase the new tests before they are committed.** Task 3 adds the tests, performs the mutation, and only then commits. Its `git checkout -- <path>` restore resets the tracked test file to the index, discarding the uncommitted additions along with the temporary change. Likewise, a dirty planned path is not proof of executor ownership, so “commit it” is not a safe response to unexpected changes on those paths (`.planning/phases/33-registry-update-bot/33-05-PLAN.md:192–207`; `AGENTS.md:43–53`).
+
+**Suggestions.** Require a clean checkout at the exact fetched SHA before landing, then verify both named checks on that SHA. Reverse only the temporary mutation, preserving the new tests. Treat unexpected edits to *any* path as user-owned until proven otherwise.
+
+**Risk Assessment.** Medium to high. Dependabot configuration is small; the owner-facing landing and executor rollback instructions are the risks.
+
+## Cross-plan assessment
+
+- **Separate readiness to execute from readiness to enable.** Fix the deterministic test failures, branch cleanup, and push-gate instructions before execution. Keep the agreed dispatch-only rollout. A landed workflow and green local tests do not complete BOT-01/BOT-02; the owner still needs to record the live proof before enabling the cron (`.planning/phases/33-registry-update-bot/33-SPEC.md:24–32`; `.planning/phases/33-registry-update-bot/33-VALIDATION.md:85–96`).
+- **Record BOT-03 at the right assurance level.** The plan supports “the reviewed workflow does not target `main`,” not “the token cannot reach `main`.” The context explicitly records the lack of a push restriction. Keep the runtime restriction as the agreed owner follow-up rather than claiming that documentation or a regex enforces it (`.planning/phases/33-registry-update-bot/33-CONTEXT.md:83–86`; `.planning/phases/33-registry-update-bot/33-03-PLAN.md:240–254`).
+- **Keep file-level evidence honest.** The existing `make validate` shellcheck target does not inspect inline Actions scripts (`Makefile:53–61`). Keep the orchestrator’s `actionlint` check, and record it as not run if unavailable. The stipulated default `TMPDIR` for full gates also is not evidence of owned scratch cleanup; if the external executor inherits the machine’s scratch-isolation rule, reconcile that at the runner boundary before running the gates (`.planning/phases/33-registry-update-bot/33-01-PLAN.md:70`; `/var/home/bazzite/.config/opencode/AGENTS.md:40–51`).
+
+**Not checked:** No tests, containers, GitHub operations, or remote writes were run. GitHub’s acceptance of dispatched checks under classic branch protection remains unverified.
