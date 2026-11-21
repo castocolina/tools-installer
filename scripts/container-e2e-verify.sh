@@ -173,6 +173,11 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           The transcript .e2e-artifacts/container-herdr-app/herdr-app-transcript.log
                           ends with TRACER_LANDING_TEARDOWN_OK after removing the container and
                           the image only when this run pulled it.
+  aws-cli [--keep-image]  Orchestrator only: PID-named Fedora box with gnupg2, unzip and a
+                          gpg shim, plus a Debian slim box without gnupg. Prints
+                          TRACER_AWS_INSTALL_OK, TRACER_AWS_RERUN_OK, TRACER_AWS_REMOVE_OK,
+                          TRACER_AWS_NOGPG_OK and TRACER_LANDING_TEARDOWN_OK. Removes its own
+                          containers and only images pulled by this run.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -330,7 +335,8 @@ resync_workspace() {
 # make e2e excludes herdr-app: its dedicated target proves it, while herdr-core and hc
 # remain by design; the shared residue allowlist must not hide them. Landing targets retain it
 # (cmd_ghostty, cmd_herdr_keys, cmd_bun_lifecycle); the app also needs network and X libraries.
-GENERIC_SKIP_TOOLS=herdr-app
+# aws-cli fails closed without gnupg on Debian; its dedicated target proves both hosts.
+GENERIC_SKIP_TOOLS=herdr-app,aws-cli
 # shellcheck disable=SC2016 # awk expands its own field references
 GENERIC_SKIP_AWK='
 BEGIN {
@@ -2807,6 +2813,7 @@ LANDING_PULLED=0
 # a bare SSL, TLS or "Connection refused" also appears in the product's own output.
 LANDING_ENV_RE='Could not resolve host|Temporary failure in name resolution|Network is unreachable|curl: \([0-9]+\)|Curl error \([0-9]+\)|Error: (initializing source|pulling|reading blob)|[Ff]ailed to download|[Ff]ailed to synchronize'
 LANDING_TRANSCRIPT=
+LANDING_EXTRA_LEFT=
 # The in-container driver module landing_driver runs; the bun-lifecycle verb swaps it.
 LANDING_DRIVER_MODULE=tests.e2e_landing_driver
 
@@ -2846,6 +2853,7 @@ landing_teardown() {
   elif grep -qx "$LANDING_CONTAINER_NAME" <<<"$listing"; then
     verdict="TRACER_LANDING_TEARDOWN_LEFT container=$LANDING_CONTAINER_NAME"
   fi
+  [[ -z "${LANDING_EXTRA_LEFT:-}" ]] || verdict="TRACER_LANDING_TEARDOWN_LEFT container=$LANDING_EXTRA_LEFT"
   printf '%s\n' "$verdict"
   # The braces catch the shell's own "No such file" for a directory a failed run never made.
   [[ -z "${LANDING_TRANSCRIPT:-}" ]] || { printf '%s\n' "$verdict" >>"$LANDING_TRANSCRIPT"; } 2>/dev/null || true
@@ -3111,6 +3119,101 @@ cmd_herdr_app() {
   return "$failed"
 }
 
+# --- aws-cli target (32-06, ONB-12): orchestrator only ---
+AWS_NOGPG_IMAGE=docker.io/library/debian:stable-slim
+AWS_NOGPG_NAME=
+AWS_NOGPG_PULLED=0
+
+aws_cli_root_setup() {
+  exec_root dnf install -y unzip gnupg2
+  exec_root sh -c 'cat > /usr/local/bin/gpg <<'"'"'SHIM'"'"'
+#!/bin/sh
+printf "%s\n" "$*" >> /var/tmp/tools-installer-e2e-aws-gpg.log
+exec /usr/bin/gpg "$@"
+SHIM
+chmod 0755 /usr/local/bin/gpg'
+}
+
+aws_nogpg_cleanup() {
+  local listing
+  [[ -n "$AWS_NOGPG_NAME" ]] || return 0
+  ct rm -f "$AWS_NOGPG_NAME" >/dev/null 2>&1 || true
+  if [[ "$LANDING_KEEP_IMAGE" -ne 1 && "$AWS_NOGPG_PULLED" -eq 1 ]]; then
+    ct rmi "$AWS_NOGPG_IMAGE" >/dev/null 2>&1 || true
+  fi
+  if ! listing="$(ct ps -a --filter "name=^${AWS_NOGPG_NAME}$" --format '{{.Names}}' 2>/dev/null)"; then
+    LANDING_EXTRA_LEFT="$AWS_NOGPG_NAME unverified"
+  elif grep -qx "$AWS_NOGPG_NAME" <<<"$listing"; then
+    LANDING_EXTRA_LEFT="$AWS_NOGPG_NAME"
+  fi
+}
+
+aws_cli_exit() {
+  local rc=$?
+  set +e
+  aws_nogpg_cleanup
+  (exit "$rc"); landing_teardown
+}
+
+aws_nogpg_leg() {
+  local rc out script
+  ct image inspect "$AWS_NOGPG_IMAGE" >/dev/null 2>&1 || AWS_NOGPG_PULLED=1
+  script="$(cat <<'NOGPG_SCRIPT'
+    set -e
+    apt-get update
+    apt-get install -y curl unzip ca-certificates
+    curl -fsSL https://awscli.amazonaws.com/v2/install.sh -o /tmp/aws-install.sh
+    echo TRACER_AWS_NOGPG_BEFORE
+    find "$HOME/.local" /usr/local/bin /usr/local/aws-cli 2>/dev/null | sort
+    echo TRACER_AWS_NOGPG_SCRIPT
+    rc=0
+    # bash, as the registry entry's shell: the vendor script has bashisms, and dash (sh on Debian) cannot parse it.
+    AWS_CLI_INSTALL_SKIP_SIGNATURE_VERIFICATION=false bash /tmp/aws-install.sh || rc=$?
+    echo TRACER_AWS_NOGPG_AFTER
+    find "$HOME/.local" /usr/local/bin /usr/local/aws-cli 2>/dev/null | sort
+    echo TRACER_AWS_NOGPG_END
+    exit "$rc"
+NOGPG_SCRIPT
+  )"
+  rc=0
+  ct run --name "$AWS_NOGPG_NAME" "$AWS_NOGPG_IMAGE" sh -c "$script" >"$PHASE_DIR/aws-nogpg.out" 2>&1 || rc=$?
+  out="$(<"$PHASE_DIR/aws-nogpg.out")"
+  if [[ "$out" != *"gpg not found"* ]] && landing_environmental "$out"; then
+    landing_infeasible nogpg "$out" | tee -a "$LANDING_TRANSCRIPT"
+    exit 2
+  fi
+  (cd "$REPO_ROOT" && uv run --isolated --no-dev python -m tests.e2e_aws_cli_driver nogpg-verdict "$rc" "$PHASE_DIR/aws-nogpg.out") | tee -a "$LANDING_TRANSCRIPT"
+  return "${PIPESTATUS[0]}"
+}
+
+cmd_aws_cli() {
+  local failed=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-image) LANDING_KEEP_IMAGE=1 ;;
+      *) die "unknown aws-cli option: $1" ;;
+    esac
+    shift
+  done
+  LANDING_CONTAINER_NAME="tools-installer-e2e-aws-cli-$$"
+  AWS_NOGPG_NAME="tools-installer-e2e-aws-nogpg-$$"
+  CONTAINER_NAME="$LANDING_CONTAINER_NAME"
+  IMAGE="$LANDING_IMAGE"
+  DISTRO=fedora
+  LANDING_DRIVER_MODULE=tests.e2e_aws_cli_driver
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-aws-cli"
+  LANDING_TRANSCRIPT="$PHASE_DIR/aws-cli-transcript.log"
+  trap aws_cli_exit EXIT
+  ensure_phase_dir
+  : >"$LANDING_TRANSCRIPT"
+  landing_note_image
+  landing_bootstrap
+  landing_stage aws-cli-root aws_cli_root_setup
+  landing_step lifecycle lifecycle || failed=1
+  aws_nogpg_leg || failed=1
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -3146,6 +3249,7 @@ main() {
     herdr-keys) cmd_herdr_keys "$@" ;;
     ghostty) cmd_ghostty "$@" ;;
     herdr-app) cmd_herdr_app "$@" ;;
+    aws-cli) cmd_aws_cli "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;

@@ -1225,12 +1225,12 @@ def test_the_generic_skip_awk_with_an_empty_list_changes_nothing_and_with_two_id
     )
 
 
-def test_the_generic_skip_list_is_exactly_herdr_app() -> None:
+def test_the_generic_skip_list_is_exactly_the_dedicated_targets() -> None:
     text = _text()
     assert re.findall(r"^GENERIC_SKIP_TOOLS=.*$", text, re.MULTILINE) == [
-        "GENERIC_SKIP_TOOLS=herdr-app"
+        "GENERIC_SKIP_TOOLS=herdr-app,aws-cli"
     ]
-    before = text.split("GENERIC_SKIP_TOOLS=herdr-app", 1)[0].splitlines()[-5:]
+    before = text.split("GENERIC_SKIP_TOOLS=herdr-app,aws-cli", 1)[0].splitlines()[-5:]
     assert all(word in " ".join(before) for word in ("herdr-app", "herdr-core", "target"))
 
 

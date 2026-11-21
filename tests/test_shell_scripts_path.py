@@ -516,25 +516,25 @@ def test_no_unclassified_accumulating_path_line_in_any_shell_script() -> None:
         ),
         (
             Path("scripts/container-e2e-verify.sh"),
-            440,
+            446,
             "one-shot command prefix inside su -c; executes once in a fresh "
             "process and is never sourced",
         ),
         (
             Path("scripts/container-e2e-verify.sh"),
-            563,
+            569,
             "one-shot command prefix inside su -c; executes once in a fresh "
             "process and is never sourced",
         ),
         (
             Path("scripts/container-e2e-verify.sh"),
-            618,
+            624,
             "one-shot command prefix inside su -c; executes once in a fresh "
             "process and is never sourced",
         ),
         (
             Path("scripts/container-e2e-verify.sh"),
-            885,
+            891,
             "one-shot command prefix inside su -c; executes once in a fresh "
             "process and is never sourced",
         ),
