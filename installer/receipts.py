@@ -301,6 +301,8 @@ class ConfigWrite:
     fragment: str
     created_parent: bool = False
     replaced_default: bool = False
+    # Ancestors created by a three-part JSON insert, topmost first.
+    created_levels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -333,6 +335,7 @@ def _config_write_from(raw: object) -> ConfigWrite | None:
     key_path = data.get("key_path")
     setting, file, fragment = data.get("setting"), data.get("file"), data.get("fragment")
     created, replaced = data.get("created_parent"), data.get("replaced_default")
+    levels = data.get("created_levels", [])
     if (
         "value" not in data
         or not isinstance(key_path, list)
@@ -342,6 +345,8 @@ def _config_write_from(raw: object) -> ConfigWrite | None:
         or not isinstance(fragment, str)
         or not isinstance(created, bool)
         or not isinstance(replaced, bool)
+        or not isinstance(levels, list)
+        or not all(isinstance(part, str) for part in cast(list[object], levels))
     ):
         return None
     return ConfigWrite(
@@ -352,6 +357,7 @@ def _config_write_from(raw: object) -> ConfigWrite | None:
         fragment,
         created,
         replaced,
+        tuple(cast(list[str], levels)),
     )
 
 
@@ -449,6 +455,11 @@ def write_ledger(ledger: ConfigLedger) -> None:
                     "fragment": entry.fragment,
                     "created_parent": entry.created_parent,
                     "replaced_default": entry.replaced_default,
+                    **(
+                        {"created_levels": list(entry.created_levels)}
+                        if entry.created_levels
+                        else {}
+                    ),
                 }
                 for entry in ledger.entries
             ],

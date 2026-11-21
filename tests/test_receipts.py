@@ -1623,6 +1623,34 @@ def test_record_hooks_merges_sorted_and_skips_a_missing_receipt() -> None:
     assert not receipts.receipt_path("nothing").exists()
 
 
+def test_the_created_levels_field_round_trips() -> None:
+    entry = receipts.ConfigWrite(
+        "test",
+        "/config",
+        ("mcp", "servers", "playwright"),
+        1,
+        "fragment",
+        created_parent=True,
+        created_levels=("mcp", "servers"),
+    )
+    ledger = receipts.ConfigLedger("opencode", entries=(entry,))
+    receipts.write_ledger(ledger)
+    assert receipts.read_ledger("opencode") == ledger
+    path = receipts.config_ledger_dir() / "opencode.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["entries"][0]["created_levels"] == ["mcp", "servers"]
+    del data["entries"][0]["created_levels"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    old = receipts.read_ledger("opencode")
+    assert old is not None and old.entries[0].created_levels == ()
+    receipts.write_ledger(old)
+    assert "created_levels" not in json.loads(path.read_text(encoding="utf-8"))["entries"][0]
+    for bad in (None, "mcp", [1], ["mcp", None]):
+        data["entries"][0]["created_levels"] = bad
+        path.write_text(json.dumps(data), encoding="utf-8")
+        assert receipts.read_ledger("opencode") is None
+
+
 def test_the_ledger_round_trips_and_fails_closed() -> None:
     entry = receipts.ConfigWrite(
         "auto-approve", "/h/.claude/settings.json", ("model",), "opus", '\n  "model": "opus",'

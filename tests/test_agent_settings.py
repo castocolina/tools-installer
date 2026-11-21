@@ -4,6 +4,7 @@ import os
 import re
 import tomllib
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -194,7 +195,176 @@ def test_a_created_parent_round_trips() -> None:
     assert reverted == original
 
     with pytest.raises(SettingsEditRefused):
-        insert_key(original, "jsonc", ("a", "b", "c"), 1)
+        insert_key(original, "jsonc", ("a", "b", "c", "d"), 1)
+
+
+def test_insert_key_three_levels_into_an_existing_servers_object() -> None:
+    original = '{"mcp": {"servers": {"other": {"type": "local"}}}}'
+    result = insert_key(original, "json", ("mcp", "servers", "playwright"), {"command": "bunx"})
+    doc = json.loads(result.text)
+    assert doc == {
+        "mcp": {"servers": {"playwright": {"command": "bunx"}, "other": {"type": "local"}}}
+    }
+    assert list(doc["mcp"]["servers"]) == ["playwright", "other"]
+    assert '"other": {"type": "local"}' in result.text
+    assert not result.created_parent and result.created_levels == ()
+    assert json.loads(original.replace('"other"', result.fragment + '"other"', 1)) == doc
+
+
+def test_insert_key_three_levels_creates_only_the_missing_levels() -> None:
+    path = ("mcp", "servers", "playwright")
+    for original, levels in [('{"mcp": {}}', ("servers",)), ('{"theme": "x"}', ("mcp", "servers"))]:
+        result = insert_key(original, "json", path, 1)
+        assert parse_settings(result.text, "json")["mcp"] == {"servers": {"playwright": 1}}
+        assert result.created_parent and result.created_levels == levels
+        if "theme" in original:
+            assert '"theme": "x"' in result.text
+    result = insert_key('{/* note */ "theme": "x",}', "jsonc", path, 1)
+    assert "/* note */" in result.text and parse_settings(result.text, "jsonc")["theme"] == "x"
+    with pytest.raises(SettingsEditRefused, match="must be an existing object"):
+        insert_key('{"mcp": "x"}', "json", path, 1)
+
+
+def _apply_test_chain(
+    monkeypatch: pytest.MonkeyPatch, original: str, path: tuple[str, ...]
+) -> Path:
+    home = Path.home()
+    config = _opencode_jsonc()
+    config.write_text(original, encoding="utf-8")
+    monkeypatch.setitem(agent_settings.DYNAMIC_KEYS, ("opencode", "test-chain"), (path,))
+    result = agent_settings.apply_value("opencode", "test-chain", 1, home=home, platform_os="linux")
+    assert result.refused is None
+    assert [key.kind for key in result.keys] == ["wrote"]
+    return config
+
+
+def _revert_test_chain() -> None:
+    (result,) = agent_settings.revert_group(
+        "opencode", "test-chain", home=Path.home(), platform_os="linux"
+    )
+    assert result.refused is None
+    assert [key.kind for key in result.keys] == ["removed"]
+
+
+def test_revert_of_a_created_three_level_chain_leaves_no_residue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = ("mcp", "servers", "playwright")
+    original = '{"theme": "x"}'
+    config = _apply_test_chain(monkeypatch, original, path)
+    _revert_test_chain()
+    assert config.read_text(encoding="utf-8") == original
+    original = '{"mcp": {"servers": {"other": 2}}}'
+    config = _apply_test_chain(monkeypatch, original, path)
+    _revert_test_chain()
+    assert parse_settings(config.read_text(encoding="utf-8"), "jsonc") == {
+        "mcp": {"servers": {"other": 2}}
+    }
+
+
+def test_revert_keeps_a_pre_existing_empty_parent(monkeypatch: pytest.MonkeyPatch) -> None:
+    path = ("mcp", "servers", "playwright")
+    for original, levels in [
+        ('{"theme": "x", "mcp": {}}', ("servers",)),
+        ('{"mcp": {"servers": {}}}', ()),
+    ]:
+        config = _apply_test_chain(monkeypatch, original, path)
+        ledger = read_ledger("opencode")
+        assert ledger is not None and ledger.entries[0].created_levels == levels
+        _revert_test_chain()
+        assert parse_settings(config.read_text(encoding="utf-8"), "jsonc") == json.loads(original)
+    config = _apply_test_chain(monkeypatch, '{"mcp": {}}', path)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            '"playwright": 1', '"playwright": 1, "other": 2'
+        ),
+        encoding="utf-8",
+    )
+    _revert_test_chain()
+    assert parse_settings(config.read_text(encoding="utf-8"), "jsonc") == {
+        "mcp": {"servers": {"other": 2}}
+    }
+
+
+@pytest.mark.parametrize(
+    ("path", "needle", "comment"),
+    [
+        (("mcp", "servers", "playwright"), '"mcp": {', "// note\n"),
+        (("mcp", "servers", "playwright"), '"servers": {', "/* note */"),
+        (("mcpServers", "playwright"), '"mcpServers": {', "/* note */"),
+        (("mcp", "servers", "playwright"), '"servers": {', ""),
+    ],
+)
+def test_a_comment_added_inside_a_created_ancestor_survives_the_revert(
+    monkeypatch: pytest.MonkeyPatch, path: tuple[str, ...], needle: str, comment: str
+) -> None:
+    config = _apply_test_chain(monkeypatch, '{"theme": "x"}', path)
+    text = config.read_text(encoding="utf-8")
+    if comment:
+        text = text.replace(needle, needle + comment, 1)
+    else:
+        text = text.replace('"playwright": 1}', '"playwright": 1,}', 1)
+    config.write_text(text, encoding="utf-8")
+    _revert_test_chain()
+    text = config.read_text(encoding="utf-8")
+    assert comment in text
+    assert '"theme": "x"' in text and '"playwright"' not in text
+    assert parse_settings(text, "jsonc")["theme"] == "x"
+    assert path[0] in parse_settings(text, "jsonc")
+
+
+def test_comment_outside_created_ancestor_does_not_block_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _apply_test_chain(monkeypatch, '{"theme": "x"}', ("mcp", "servers", "playwright"))
+    text = config.read_text(encoding="utf-8").replace('"mcp":', '/* outside */ "mcp":', 1)
+    config.write_text(text, encoding="utf-8")
+    _revert_test_chain()
+    text = config.read_text(encoding="utf-8")
+    assert "/* outside */" in text and "mcp" not in parse_settings(text, "jsonc")
+
+
+def test_comment_after_created_ancestor_does_not_block_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _apply_test_chain(monkeypatch, '{"theme": "x"}', ("mcp", "servers", "playwright"))
+    text = config.read_text(encoding="utf-8").replace('}}, "theme"', '}} /* outside */, "theme"')
+    config.write_text(text, encoding="utf-8")
+    _revert_test_chain()
+    text = config.read_text(encoding="utf-8")
+    assert "mcp" not in parse_settings(text, "jsonc")
+
+
+def test_plain_json_created_parent_reverts(monkeypatch: pytest.MonkeyPatch) -> None:
+    home = Path.home()
+    config = _claude_settings_file()
+    original = '{"theme": "x"}'
+    config.write_text(original, encoding="utf-8")
+    monkeypatch.setitem(
+        agent_settings.DYNAMIC_KEYS, ("claude", "test-chain"), (("mcpServers", "playwright"),)
+    )
+    assert (
+        agent_settings.apply_value(
+            "claude", "test-chain", 1, home=home, platform_os="linux"
+        ).refused
+        is None
+    )
+    (result,) = agent_settings.revert_group("claude", "test-chain", home=home, platform_os="linux")
+    assert result.refused is None and config.read_text(encoding="utf-8") == original
+
+
+def test_insert_key_four_levels_still_refuses() -> None:
+    with pytest.raises(SettingsEditRefused, match="nest at most"):
+        insert_key("{}", "json", ("a", "b", "c", "d"), 1)
+
+
+def test_two_level_behavior_is_unchanged() -> None:
+    result = insert_key('{"theme": "x"}', "json", ("mcpServers", "playwright"), 1)
+    assert result.created_parent and result.created_levels == ()
+    assert (
+        remove_key(result.text, "json", ("mcpServers",), fragment=result.fragment)
+        == '{"theme": "x"}'
+    )
 
 
 def test_an_empty_object_round_trips() -> None:
@@ -1817,7 +1987,19 @@ def test_setting_keys_of_a_dynamic_group_is_empty() -> None:
     home = Path.home()
     _herdr_file().write_text(HERDR_CONFIG, encoding="utf-8")
 
-    assert agent_settings.DYNAMIC_KEYS == {("herdr", "default-shell"): (DEFAULT_SHELL,)}
+    assert agent_settings.DYNAMIC_KEYS == {
+        ("herdr", "default-shell"): (DEFAULT_SHELL,),
+        ("claude", "playwright-env"): (("env", "PLAYWRIGHT_MCP_EXECUTABLE_PATH"),),
+        ("claude", "mcp-playwright"): (("mcpServers", "playwright"),),
+        ("cursor-agent", "mcp-playwright"): (("mcpServers", "playwright"),),
+        ("copilot", "mcp-playwright"): (("mcpServers", "playwright"),),
+        ("opencode", "mcp-playwright"): (("mcp", "servers", "playwright"),),
+        ("codex", "mcp-playwright"): (
+            ("mcp_servers", "playwright", "command"),
+            ("mcp_servers", "playwright", "args"),
+            ("mcp_servers", "playwright", "env"),
+        ),
+    }
     assert agent_settings.setting_keys("herdr", "default-shell", "linux") == ()
     facts = agent_settings.setting_facts(
         "herdr", "default-shell", home=home, platform_os="linux", environ={}
@@ -2060,6 +2242,394 @@ def test_default_shell_not_in_the_ledger_stays_the_users_when_zsh_moves() -> Non
     assert _default_shell(config.read_text(encoding="utf-8")) == "/bin/fish"
 
 
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "opencode", "codex"])
+def test_apply_mcp_server_writes_one_entry_per_host(agent: str, tmp_path: Path) -> None:
+    result = agent_settings.apply_mcp_server(
+        agent,
+        command="/h/.bun/bin/bunx",
+        spec="@playwright/mcp@0.0.85",
+        executable_path=None,
+        home=tmp_path,
+        platform_os="linux",
+        environ={},
+    )
+    assert result.refused is None
+    path = agent_settings.mcp_file(agent, home=tmp_path, platform_os="linux", environ={})
+    assert result.path == path
+    doc = parse_settings(path.read_text(encoding="utf-8"), result.fmt)
+    if agent == "codex":
+        assert doc["mcp_servers"] == {
+            "playwright": {"command": "/h/.bun/bin/bunx", "args": ["@playwright/mcp@0.0.85"]}
+        }
+    elif agent == "opencode":
+        assert doc["mcp"] == {
+            "servers": {
+                "playwright": {
+                    "type": "local",
+                    "command": ["/h/.bun/bin/bunx", "@playwright/mcp@0.0.85"],
+                }
+            }
+        }
+    else:
+        server: dict[str, object] = {
+            "command": "/h/.bun/bin/bunx",
+            "args": ["@playwright/mcp@0.0.85"],
+        }
+        if agent == "copilot":
+            server.update({"type": "local", "tools": ["*"]})
+        assert doc["mcpServers"] == {"playwright": server}
+    ledger = read_ledger(agent)
+    assert ledger is not None
+    assert all(
+        entry.setting == "mcp-playwright" and entry.file == str(path) for entry in ledger.entries
+    )
+    assert ledger.entries
+
+
+def _mcp_apply(
+    agent: str, home: Path, executable_path: str | None = None, spec: str = "@playwright/mcp@0.0.85"
+) -> FileResult:
+    return agent_settings.apply_mcp_server(
+        agent,
+        command="bunx",
+        spec=spec,
+        executable_path=executable_path,
+        home=home,
+        platform_os="linux",
+        environ={},
+    )
+
+
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "opencode", "codex"])
+def test_apply_mcp_server_keeps_an_existing_playwright_entry_byte_identical(
+    agent: str, tmp_path: Path
+) -> None:
+    path = agent_settings.mcp_file(agent, home=tmp_path, platform_os="linux", environ={})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if agent == "codex":
+        original = (
+            '[mcp_servers.other]\ncommand = "other"\n[mcp_servers.playwright]\ncommand = "mine"\n'
+        )
+    elif agent == "opencode":
+        original = '{"mcp": {"playwright": {"type": "local"}, "other": {}}}'
+    else:
+        original = '{"mcpServers": {"other": {}, "playwright": {"command": "mine"}}}'
+    path.write_text(original, encoding="utf-8")
+    result = _mcp_apply(agent, tmp_path)
+    assert [key.kind for key in result.keys] == ["set_by_you"]
+    assert path.read_text(encoding="utf-8") == original
+    assert read_ledger(agent) is None
+
+
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "opencode", "codex"])
+def test_a_second_call_is_already_and_a_different_server_is_set_by_you(
+    agent: str, tmp_path: Path
+) -> None:
+    first = _mcp_apply(agent, tmp_path)
+    assert first.refused is None
+    before = first.path.read_bytes()
+    ledger = read_ledger(agent)
+    assert [k.kind for k in _mcp_apply(agent, tmp_path).keys] == ["already"]
+    assert [k.kind for k in _mcp_apply(agent, tmp_path, spec="new-pin").keys] == ["set_by_you"]
+    assert first.path.read_bytes() == before and read_ledger(agent) == ledger
+
+
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "opencode", "codex"])
+def test_the_flatpak_path_is_exported_only_when_given(agent: str, tmp_path: Path) -> None:
+    wrapper = "/var/lib/flatpak/exports/bin/com.google.Chrome"
+    result = _mcp_apply(agent, tmp_path, wrapper)
+    assert result.refused is None
+    doc = parse_settings(result.path.read_text(encoding="utf-8"), result.fmt)
+    path = (
+        ("mcp", "servers", "playwright", "environment")
+        if agent == "opencode"
+        else (
+            ("mcp_servers", "playwright", "env")
+            if agent == "codex"
+            else ("mcpServers", "playwright", "env")
+        )
+    )
+    assert agent_settings.lookup(doc, path) == {"PLAYWRIGHT_MCP_EXECUTABLE_PATH": wrapper}
+    with pytest.raises(ValueError):
+        _mcp_apply(agent, tmp_path, "relative")
+    for command, spec in [("", "x"), ("x", ""), ("x\n", "x")]:
+        with pytest.raises(ValueError):
+            agent_settings.apply_mcp_server(
+                agent,
+                command=command,
+                spec=spec,
+                executable_path=None,
+                home=tmp_path,
+                platform_os="linux",
+                environ={},
+            )
+
+
+@pytest.mark.parametrize(
+    ("seed", "outcome"),
+    [
+        (None, "wrote"),
+        ("{}", "wrote"),
+        ('{"theme":"x"}', "wrote"),
+        ('{"mcp":{}}', "wrote"),
+        ('{"mcp":{"servers":{"other":{}}}}', "wrote"),
+        ('{"mcp":{"playwright":{}}}', "set_by_you"),
+        ('{"mcp":{"other":{}}}', "partial"),
+        ('{"mcp":"x"}', "refused"),
+    ],
+)
+def test_opencode_shapes(seed: str | None, outcome: str, tmp_path: Path) -> None:
+    path = agent_settings.mcp_file("opencode", home=tmp_path, platform_os="linux", environ={})
+    if seed is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(seed, encoding="utf-8")
+    result = _mcp_apply("opencode", tmp_path)
+    if outcome == "partial":
+        assert (
+            result.refused
+            and result.refused.startswith("partial:")
+            and "add the playwright server yourself" in result.refused
+        )
+    elif outcome == "refused":
+        assert result.refused
+    else:
+        assert result.refused is None and result.keys[0].kind == outcome
+    if outcome != "wrote":
+        assert path.read_text(encoding="utf-8") == seed and read_ledger("opencode") is None
+
+
+@pytest.mark.parametrize(
+    ("agent", "alternate"),
+    [
+        ("claude", '{"mcpServers":{"playwright":{"command":"mine"}}}'),
+        ("opencode", '{"mcp":{"playwright":{"type":"local"}}}'),
+        ("codex", '[mcp_servers.playwright]\ncommand = "mine"\n'),
+    ],
+)
+def test_the_presence_check_runs_inside_the_write_snapshot(
+    agent: str, alternate: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+
+    def race(path: Path, before: FileSnapshot | None, text: str) -> None:
+        calls.append(1)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(alternate, encoding="utf-8")
+        raise SettingsChanged()
+
+    monkeypatch.setattr(agent_settings, "write_if_unchanged", race)
+    result = _mcp_apply(agent, tmp_path)
+    assert [k.kind for k in result.keys] == ["set_by_you"]
+    assert result.path.read_text(encoding="utf-8") == alternate
+    assert calls == [1] and read_ledger(agent) is None
+
+
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "opencode", "codex"])
+def test_revert_mcp_removes_only_ours(agent: str, tmp_path: Path) -> None:
+    result = _mcp_apply(agent, tmp_path)
+    assert result.refused is None
+    results = agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert all(r.refused is None for r in results)
+    assert not result.path.exists() and read_ledger(agent) is None
+
+
+@pytest.mark.parametrize("wrapper", [None, "/chrome"])
+@pytest.mark.parametrize("edit", ["args", "command", "delete", "added"])
+def test_a_codex_server_is_one_ownership_unit_on_revert(
+    wrapper: str | None, edit: str, tmp_path: Path
+) -> None:
+    result = _mcp_apply("codex", tmp_path, wrapper)
+    assert result.refused is None
+    text = result.path.read_text(encoding="utf-8")
+    if edit == "args":
+        text = text.replace("@playwright/mcp@0.0.85", "mine")
+    elif edit == "command":
+        text = text.replace('"bunx"', '"mine"')
+    elif edit == "delete":
+        text = (
+            "\n".join(
+                line
+                for line in text.splitlines()
+                if not line.startswith("env =" if wrapper else "args =")
+            )
+            + "\n"
+        )
+    else:
+        text += "startup_timeout_sec = 30\n"
+    result.path.write_text(text, encoding="utf-8")
+    results = agent_settings.revert_group(
+        "codex", "mcp-playwright", home=tmp_path, platform_os="linux", environ={}
+    )
+    assert results[0].refused is None
+    if edit == "added":
+        assert tomllib.loads(result.path.read_text(encoding="utf-8"))["mcp_servers"][
+            "playwright"
+        ] == {"startup_timeout_sec": 30}
+    else:
+        assert result.path.read_text(encoding="utf-8") == text
+        assert all(k.kind == "kept_changed" for k in results[0].keys)
+    assert read_ledger("codex") is None
+
+
+def test_held_states_applies_the_unit_rule() -> None:
+    entries = (
+        ConfigWrite("mcp-playwright", "f", ("mcp_servers", "playwright", "command"), "x", ""),
+        ConfigWrite("mcp-playwright", "f", ("mcp_servers", "playwright", "args"), ["a"], ""),
+        ConfigWrite("x", "f", ("other",), 1, ""),
+    )
+    for server, expected in [
+        ({"command": "x", "args": ["a"]}, (True, True, True)),
+        ({}, (None, None, True)),
+        ({"command": "y", "args": ["a"]}, (False, False, True)),
+        ({"command": "x"}, (False, None, True)),
+    ]:
+        assert (
+            agent_settings.held_states(entries, {"mcp_servers": {"playwright": server}, "other": 1})
+            == expected
+        )
+
+
+def test_the_claude_env_key_is_an_absent_only_dynamic_key(tmp_path: Path) -> None:
+    result = agent_settings.apply_value(
+        "claude", "playwright-env", "/chrome", home=tmp_path, platform_os="linux", environ={}
+    )
+    assert result.keys[0].kind == "wrote"
+    assert agent_settings.claude_env_set(home=tmp_path, platform_os="linux", environ={})
+    removed = agent_settings.revert_group(
+        "claude", "playwright-env", home=tmp_path, platform_os="linux", environ={}
+    )
+    assert removed[0].keys[0].kind == "removed"
+    result.path.parent.mkdir(parents=True, exist_ok=True)
+    result.path.write_text('{"env":{"PLAYWRIGHT_MCP_EXECUTABLE_PATH":"/mine"}}', encoding="utf-8")
+    assert (
+        agent_settings.apply_value(
+            "claude", "playwright-env", "/chrome", home=tmp_path, platform_os="linux", environ={}
+        )
+        .keys[0]
+        .kind
+        == "set_by_you"
+    )
+    assert (
+        json.loads(result.path.read_text(encoding="utf-8"))["env"]["PLAYWRIGHT_MCP_EXECUTABLE_PATH"]
+        == "/mine"
+    )
+
+
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "opencode", "codex"])
+def test_other_servers_keep_their_order_and_bytes(agent: str, tmp_path: Path) -> None:
+    path = agent_settings.mcp_file(agent, home=tmp_path, platform_os="linux", environ={})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if agent == "codex":
+        original = "".join(
+            f'[mcp_servers.{name}]\ncommand = "{name}"\n' for name in ("one", "two", "three")
+        )
+    elif agent == "opencode":
+        original = '{"mcp":{"servers":{"one": 1, "two": 2, "three": 3}}}'
+    else:
+        original = '{"mcpServers":{"one": 1, "two": 2, "three": 3}}'
+    path.write_text(original, encoding="utf-8")
+    result = _mcp_apply(agent, tmp_path)
+    assert result.refused is None
+    text = path.read_text(encoding="utf-8")
+    assert text.index("one") < text.index("two") < text.index("three")
+    assert (text.index("playwright") > text.index("three")) == (agent == "codex")
+    if agent == "codex":
+        for name in ("one", "two", "three"):
+            assert f'[mcp_servers.{name}]\ncommand = "{name}"\n' in text
+    else:
+        for name, value in (("one", 1), ("two", 2), ("three", 3)):
+            assert f'"{name}": {value}' in text
+    assert (
+        agent_settings.revert_group(
+            agent, "mcp-playwright", home=tmp_path, platform_os="linux", environ={}
+        )[0].refused
+        is None
+    )
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_mcp_server_present_and_claude_helpers(tmp_path: Path) -> None:
+    assert not agent_settings.mcp_server_present("claude", home=tmp_path, platform_os="linux")
+    result = _mcp_apply("claude", tmp_path)
+    assert agent_settings.mcp_server_present("claude", home=tmp_path, platform_os="linux")
+    result.path.write_text("{bad", encoding="utf-8")
+    assert not agent_settings.mcp_server_present("claude", home=tmp_path, platform_os="linux")
+    path = tmp_path / ".claude" / "settings.json"
+    path.parent.mkdir(parents=True)
+    for value, expected in [(True, True), (False, False)]:
+        path.write_text(
+            json.dumps({"enabledPlugins": {"playwright@plugin": value}}), encoding="utf-8"
+        )
+        assert agent_settings.claude_plugin_enabled(home=tmp_path, platform_os="linux") is expected
+    path.write_text("{bad", encoding="utf-8")
+    assert not agent_settings.claude_plugin_enabled(home=tmp_path, platform_os="linux")
+    assert not agent_settings.claude_env_set(home=tmp_path, platform_os="linux")
+
+
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "codex", "opencode"])
+def test_a_forged_ledger_entry_cannot_cross_between_the_mcp_and_the_ordinary_file(
+    agent: str, tmp_path: Path
+) -> None:
+    result = _mcp_apply(agent, tmp_path)
+    assert result.refused is None
+    ledger = read_ledger(agent)
+    assert ledger is not None
+    ordinary = agent_settings.settings_file(agent, home=tmp_path, platform_os="linux", environ={})
+    if ordinary != result.path:
+        ordinary.parent.mkdir(parents=True, exist_ok=True)
+        ordinary.write_text("{}", encoding="utf-8")
+        forged = ConfigWrite(
+            "mcp-playwright", str(ordinary), ledger.entries[0].key_path, ledger.entries[0].value, ""
+        )
+        write_ledger(ConfigLedger(agent, entries=(forged,)))
+        refused = agent_settings.revert_group(
+            agent, "mcp-playwright", home=tmp_path, platform_os="linux", environ={}
+        )
+        assert refused[0].refused == agent_settings.NOT_A_SETTINGS_FILE
+        assert ordinary.read_text(encoding="utf-8") == "{}"
+    else:
+        forged = ConfigWrite("mcp-playwright", str(ordinary), ("permissions",), "x", "")
+        write_ledger(ConfigLedger(agent, entries=(forged,)))
+        before = ordinary.read_bytes()
+        assert (
+            agent_settings.revert_group(
+                agent, "mcp-playwright", home=tmp_path, platform_os="linux", environ={}
+            )[0].keys
+            == ()
+        )
+        assert ordinary.read_bytes() == before
+    write_ledger(ledger)
+    assert (
+        agent_settings.revert_group(
+            agent, "mcp-playwright", home=tmp_path, platform_os="linux", environ={}
+        )[0].refused
+        is None
+    )
+    assert not result.path.exists()
+
+
+@pytest.mark.parametrize(
+    "env_text", ['env = { X = "1" }\n', '[mcp_servers.playwright.env]\nX = "1"\n']
+)
+def test_codex_added_env_survives_revert(env_text: str, tmp_path: Path) -> None:
+    result = _mcp_apply("codex", tmp_path)
+    result.path.write_text(result.path.read_text(encoding="utf-8") + env_text, encoding="utf-8")
+    before = result.path.read_bytes()
+    assert _mcp_apply("codex", tmp_path, "/chrome").keys[0].kind == "set_by_you"
+    assert result.path.read_bytes() == before
+    reverted = agent_settings.revert_group(
+        "codex", "mcp-playwright", home=tmp_path, platform_os="linux"
+    )
+    assert reverted[0].refused is None
+    assert tomllib.loads(result.path.read_text(encoding="utf-8"))["mcp_servers"]["playwright"] == {
+        "env": {"X": "1"}
+    }
+    before = result.path.read_bytes()
+    assert _mcp_apply("codex", tmp_path, "/chrome").keys[0].kind == "set_by_you"
+    assert result.path.read_bytes() == before
+    assert read_ledger("codex") is None
+
+
 def test_revert_removes_the_owned_key_when_a_user_comment_sits_under_the_created_table() -> None:
     config = _herdr_file()
     assert not config.exists()
@@ -2075,3 +2645,177 @@ def test_revert_removes_the_owned_key_when_a_user_comment_sits_under_the_created
     assert [(k.key, k.kind) for k in result.keys] == [("terminal.default_shell", "removed")]
     assert "default_shell" not in config.read_text(encoding="utf-8")
     assert "# my note" in config.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "opencode", "codex"])
+def test_mcp_presence_and_revert_preserve_other_servers(agent: str, tmp_path: Path) -> None:
+    path = agent_settings.mcp_file(agent, home=tmp_path, platform_os="linux", environ={})
+    assert not agent_settings.mcp_server_present(agent, home=tmp_path, platform_os="linux")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = (
+        '[mcp_servers.other]\ncommand = "other"\n'
+        if agent == "codex"
+        else (
+            '{"mcp":{"servers":{"other":{"type":"local"}}}}'
+            if agent == "opencode"
+            else '{"mcpServers":{"other":{"command":"other"}}}'
+        )
+    )
+    path.write_text(original, encoding="utf-8")
+    assert not agent_settings.mcp_server_present(agent, home=tmp_path, platform_os="linux")
+    assert _mcp_apply(agent, tmp_path).refused is None
+    assert agent_settings.mcp_server_present(agent, home=tmp_path, platform_os="linux")
+    results = agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert all(r.refused is None for r in results)
+    assert path.read_text(encoding="utf-8") == original
+    assert read_ledger(agent) is None
+
+
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "opencode", "codex"])
+def test_mcp_revert_keeps_user_edits_and_releases_ledger(agent: str, tmp_path: Path) -> None:
+    result = _mcp_apply(agent, tmp_path)
+    text = result.path.read_text(encoding="utf-8").replace('"bunx"', '"mine"')
+    result.path.write_text(text, encoding="utf-8")
+    results = agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert any(k.kind == "kept_changed" for r in results for k in r.keys)
+    assert result.path.read_text(encoding="utf-8") == text
+    assert read_ledger(agent) is None
+
+
+@pytest.mark.parametrize("wrapper", [None, "/chrome"])
+def test_codex_identical_repeat_and_intact_revert(wrapper: str | None, tmp_path: Path) -> None:
+    first = _mcp_apply("codex", tmp_path, wrapper)
+    before, ledger = first.path.read_bytes(), read_ledger("codex")
+    assert ledger is not None and len(ledger.entries) == (3 if wrapper else 2)
+    assert [k.kind for k in _mcp_apply("codex", tmp_path, wrapper).keys] == ["already"]
+    assert first.path.read_bytes() == before and read_ledger("codex") == ledger
+    results = agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert all(r.refused is None for r in results)
+    assert not first.path.exists() and read_ledger("codex") is None
+
+
+@pytest.mark.parametrize("seed", ["", "[mcp_servers]\n", '[mcp_servers.foo]\ncommand = "foo"\n'])
+def test_codex_accepts_empty_or_existing_server_tables(seed: str, tmp_path: Path) -> None:
+    path = agent_settings.mcp_file("codex", home=tmp_path, platform_os="linux", environ={})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(seed, encoding="utf-8")
+    assert _mcp_apply("codex", tmp_path).refused is None
+    doc = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert doc["mcp_servers"]["playwright"] == {
+        "command": "bunx",
+        "args": ["@playwright/mcp@0.0.85"],
+    }
+    if "foo" in seed:
+        assert doc["mcp_servers"]["foo"] == {"command": "foo"}
+    assert agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert path.read_text(encoding="utf-8") == seed
+
+
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot", "opencode"])
+@pytest.mark.parametrize("seed", ["{}", '{"theme": "x"}'])
+def test_mcp_empty_json_server_table(agent: str, seed: str, tmp_path: Path) -> None:
+    path = agent_settings.mcp_file(agent, home=tmp_path, platform_os="linux", environ={})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(seed, encoding="utf-8")
+    result = _mcp_apply(agent, tmp_path)
+    doc = parse_settings(path.read_text(encoding="utf-8"), result.fmt)
+    server_path = ("mcp", "servers") if agent == "opencode" else ("mcpServers",)
+    servers = agent_settings.lookup(doc, server_path)
+    assert isinstance(servers, dict)
+    assert list(cast(dict[str, object], servers)) == ["playwright"]
+    assert agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert path.read_text(encoding="utf-8") == seed
+
+
+@pytest.mark.parametrize("agent", ["claude", "cursor-agent", "copilot"])
+def test_forged_ordinary_setting_cannot_target_mcp_file(agent: str, tmp_path: Path) -> None:
+    result = _mcp_apply(agent, tmp_path)
+    ledger = read_ledger(agent)
+    assert ledger is not None
+    key = agent_settings.setting_keys(agent, "auto-approve", "linux")[0]
+    forged = ConfigWrite("auto-approve", str(result.path), key.path, key.value, "")
+    before = result.path.read_bytes()
+    write_ledger(ConfigLedger(agent, entries=(forged,)))
+    (refused,) = agent_settings.revert_group(
+        agent, "auto-approve", home=tmp_path, platform_os="linux", environ={}
+    )
+    assert refused.refused == agent_settings.NOT_A_SETTINGS_FILE
+    assert result.path.read_bytes() == before
+    write_ledger(ledger)
+    assert agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert not result.path.exists()
+
+
+@pytest.mark.parametrize("agent", ["codex", "opencode"])
+def test_forged_shared_file_key_paths_cannot_cross_settings(agent: str, tmp_path: Path) -> None:
+    result = _mcp_apply(agent, tmp_path)
+    ledger = read_ledger(agent)
+    assert ledger is not None
+    key = agent_settings.setting_keys(agent, "auto-approve", "linux")[0]
+    for setting, path, value in [
+        ("mcp-playwright", key.path, key.value),
+        ("auto-approve", ledger.entries[0].key_path, ledger.entries[0].value),
+    ]:
+        forged = ConfigWrite(setting, str(result.path), path, value, "")
+        write_ledger(ConfigLedger(agent, entries=(forged,)))
+        before = result.path.read_bytes()
+        (ignored,) = agent_settings.revert_group(
+            agent, setting, home=tmp_path, platform_os="linux", environ={}
+        )
+        assert ignored.refused is None and ignored.keys == ()
+        assert result.path.read_bytes() == before
+    write_ledger(ledger)
+    assert agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert not result.path.exists()
+
+
+def test_forged_claude_env_cannot_target_mcp_file(tmp_path: Path) -> None:
+    result = _mcp_apply("claude", tmp_path)
+    ledger = read_ledger("claude")
+    assert ledger is not None
+    forged = ConfigWrite(
+        "playwright-env", str(result.path), ("env", "PLAYWRIGHT_MCP_EXECUTABLE_PATH"), "/chrome", ""
+    )
+    write_ledger(ConfigLedger("claude", entries=(forged,)))
+    before = result.path.read_bytes()
+    (refused,) = agent_settings.revert_group(
+        "claude", "playwright-env", home=tmp_path, platform_os="linux", environ={}
+    )
+    assert refused.refused == agent_settings.NOT_A_SETTINGS_FILE
+    assert result.path.read_bytes() == before
+    write_ledger(ledger)
+    assert agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert not result.path.exists()
+
+
+def test_claude_helpers_missing_and_env_values(tmp_path: Path) -> None:
+    path = tmp_path / ".claude" / "settings.json"
+    path.parent.mkdir(parents=True)
+    for text, plugin, env in [
+        ("{}", False, False),
+        ('{"enabledPlugins":{"other@plugin":true}}', False, False),
+        ('{"enabledPlugins":{"playwright@plugin":false}}', False, False),
+        (
+            '{"enabledPlugins":{"playwright@plugin":true},"env":{"PLAYWRIGHT_MCP_EXECUTABLE_PATH":"/chrome"}}',
+            True,
+            True,
+        ),
+        ("{bad", False, False),
+    ]:
+        path.write_text(text, encoding="utf-8")
+        assert agent_settings.claude_plugin_enabled(home=tmp_path, platform_os="linux") is plugin
+        assert agent_settings.claude_env_set(home=tmp_path, platform_os="linux") is env
+
+
+def test_opencode_v1_presence_and_v2_existing_server(tmp_path: Path) -> None:
+    path = agent_settings.mcp_file("opencode", home=tmp_path, platform_os="linux", environ={})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for text in [
+        '{"mcp":{"playwright":{"type":"local"}}}',
+        '{"mcp":{"servers":{"playwright":{"type":"local"}}}}',
+    ]:
+        path.write_text(text, encoding="utf-8")
+        assert agent_settings.mcp_server_present("opencode", home=tmp_path, platform_os="linux")
+        assert _mcp_apply("opencode", tmp_path).keys[0].kind == "set_by_you"
+        assert path.read_text(encoding="utf-8") == text
+        assert read_ledger("opencode") is None

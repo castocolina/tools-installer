@@ -14,7 +14,7 @@ import json
 import os
 import re
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, Literal, cast
@@ -285,6 +285,7 @@ class Inserted:
     text: str
     fragment: str
     created_parent: bool
+    created_levels: tuple[str, ...] = ()
 
 
 def insert_key(text: str, fmt: SettingsFormat, key_path: KeyPath, value: object) -> Inserted:
@@ -297,18 +298,26 @@ def insert_key(text: str, fmt: SettingsFormat, key_path: KeyPath, value: object)
         return _insert_toml(text, doc, key_path, value)
     if not text.strip():
         raise SettingsEditRefused("empty file: there is no object to insert into")
-    if len(key_path) not in (1, 2):
-        raise SettingsEditRefused("settings keys nest at most one level")
-    parent = key_path[:-1]
-    created_parent = len(key_path) == 2 and lookup(doc, parent) is ABSENT
-    if parent and not created_parent and not isinstance(lookup(doc, parent), dict):
-        raise SettingsEditRefused(f"{'.'.join(parent)} must be an existing object")
-    if created_parent:
-        target = key_path[:-2]
-        member = f"{_dump(parent[-1])}: {{{_dump(key_path[-1])}: {_dump(value)}}}"
-    else:
-        target = parent
-        member = f"{_dump(key_path[-1])}: {_dump(value)}"
+    if len(key_path) not in (1, 2, 3):
+        raise SettingsEditRefused("settings keys nest at most two levels below the root")
+    depth = 0
+    for depth_candidate in range(1, len(key_path)):
+        node = lookup(doc, key_path[:depth_candidate])
+        if node is ABSENT:
+            break
+        if not isinstance(node, dict):
+            raise SettingsEditRefused(
+                f"{'.'.join(key_path[:depth_candidate])} must be an existing object"
+            )
+        depth = depth_candidate
+    target = key_path[:depth]
+    remaining = key_path[depth:]
+    created_parent = len(remaining) > 1
+    nested: object = value
+    for part in reversed(remaining[1:]):
+        nested = {part: nested}
+    member = f"{_dump(remaining[0])}: {_dump(nested)}"
+    created_levels = key_path[depth:-1] if len(key_path) == 3 else ()
     clean = _clean(text, fmt)
     obj = _object_open(clean, target)
     members, _ = _members(clean, obj)
@@ -322,7 +331,7 @@ def insert_key(text: str, fmt: SettingsFormat, key_path: KeyPath, value: object)
         fragment = f"\n{_leading_ws(base)}  {member}"
     new_text = text[: obj + 1] + fragment + text[obj + 1 :]
     expected = _edited(doc, key_path, value)
-    return Inserted(_guarded(new_text, fmt, expected), fragment, created_parent)
+    return Inserted(_guarded(new_text, fmt, expected), fragment, created_parent, created_levels)
 
 
 _BARE_KEY: Final = re.compile(r"[A-Za-z0-9_-]+")
@@ -457,7 +466,7 @@ def _cut_member(text: str, clean: str, members: list[_Member], member: _Member) 
     following comma (and the space after it) goes with it; the last member takes the
     preceding comma instead; a member alone on its line takes its newline."""
     start = member.key_start
-    while start > 0 and clean[start - 1] in " \t":
+    while start > 0 and text[start - 1] in " \t":
         start -= 1
     end = member.value_end
     after = _skip_ws(clean, end)
@@ -717,8 +726,22 @@ _KEYS: Final[dict[tuple[str, str], tuple[SettingKey, ...]]] = {
 
 # Keys whose value only the caller knows at run time (24 D-08b): `apply_value` writes it, the
 # ledger entry records it, and a revert takes the recorded value as the one to match.
+MCP_SETTING = "mcp-playwright"
+MCP_ENV_SETTING = "playwright-env"
+MCP_SERVER_NAME = "playwright"
+PLAYWRIGHT_ENV_VAR = "PLAYWRIGHT_MCP_EXECUTABLE_PATH"
+MCP_AGENTS = ("claude", "codex", "opencode", "cursor-agent", "copilot")
+_MCP_PATHS: Final[dict[str, tuple[KeyPath, ...]]] = {
+    "claude": (("mcpServers", "playwright"),),
+    "cursor-agent": (("mcpServers", "playwright"),),
+    "copilot": (("mcpServers", "playwright"),),
+    "opencode": (("mcp", "servers", "playwright"),),
+    "codex": tuple(("mcp_servers", "playwright", key) for key in ("command", "args", "env")),
+}
 DYNAMIC_KEYS: Final[dict[tuple[str, str], tuple[KeyPath, ...]]] = {
     ("herdr", "default-shell"): (("terminal", "default_shell"),),
+    ("claude", MCP_ENV_SETTING): (("env", PLAYWRIGHT_ENV_VAR),),
+    **{(agent, MCP_SETTING): paths for agent, paths in _MCP_PATHS.items()},
 }
 
 # Keys an earlier release wrote: never written again, read only to revert their ledger entries
@@ -774,6 +797,23 @@ def settings_file(
     return path
 
 
+def mcp_file(
+    agent: str, *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+) -> Path:
+    """The host's MCP configuration path."""
+    if agent not in MCP_AGENTS:
+        raise ValueError(f"unknown MCP agent: {agent!r}")
+    if agent == "claude":
+        # shortcut: CLAUDE_CONFIG_DIR is not honored; add support when needed.
+        return home / ".claude.json"
+    path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
+    if agent == "cursor-agent":
+        return path.with_name("mcp.json")
+    if agent == "copilot":
+        return path.with_name("mcp-config.json")
+    return path
+
+
 def _conflict(
     agent: str, *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
 ) -> str | None:
@@ -804,6 +844,8 @@ class FileResult:
     keys: tuple[KeyResult, ...] = ()
     refused: str | None = None
 
+
+ServerGate = Callable[[dict[str, object]], tuple[tuple[KeyResult, ...], str | None] | None]
 
 _BOM: Final = "\ufeff"
 
@@ -865,7 +907,13 @@ def _apply_pass(
             text = inserted.text
             writes.append(
                 ConfigWrite(
-                    setting, file, key.path, key.value, inserted.fragment, inserted.created_parent
+                    setting,
+                    file,
+                    key.path,
+                    key.value,
+                    inserted.fragment,
+                    inserted.created_parent,
+                    created_levels=inserted.created_levels,
                 )
             )
             results.append(KeyResult(name, "wrote", _dump(key.value)))
@@ -941,6 +989,7 @@ def _apply_once(
     *,
     home: Path,
     skip_recorded: bool,
+    gate: ServerGate | None = None,
 ) -> FileResult:
     """One read, compute and reserve-then-commit write; SettingsChanged goes to the caller."""
     file = str(path)
@@ -958,9 +1007,10 @@ def _apply_once(
             for entry in ledger.entries
             if entry.setting == setting and entry.file == file
         }
-        retired_skip, retired_results = _retired_block(
-            agent, setting, parse_settings(text, fmt), ours
-        )
+        doc = parse_settings(text, fmt)
+        if gate is not None and (answer := gate(doc)) is not None:
+            return FileResult(agent, setting, path, fmt, keys=answer[0], refused=answer[1])
+        retired_skip, retired_results = _retired_block(agent, setting, doc, ours)
         step = _apply_pass(text, fmt, setting, file, keys, recorded | retired_skip, ours)
         keys_out = retired_results + step.keys
     except (SettingsParseError, SettingsEditRefused, OSError) as exc:
@@ -1011,16 +1061,18 @@ def _apply_keys(
     platform_os: str,
     environ: Mapping[str, str] | None,
     skip_recorded: bool,
+    path: Path | None = None,
+    gate: ServerGate | None = None,
 ) -> FileResult:
     fmt = _format(agent)
-    path = settings_file(agent, home=home, platform_os=platform_os, environ=environ)
+    path = path or settings_file(agent, home=home, platform_os=platform_os, environ=environ)
     conflict = _conflict(agent, home=home, platform_os=platform_os, environ=environ)
     if conflict is not None:
         return FileResult(agent, setting, path, fmt, refused=conflict)
     for _attempt in range(2):
         try:
             return _apply_once(
-                agent, setting, path, fmt, keys, home=home, skip_recorded=skip_recorded
+                agent, setting, path, fmt, keys, home=home, skip_recorded=skip_recorded, gate=gate
             )
         except SettingsChanged:
             continue
@@ -1078,6 +1130,114 @@ def apply_value(
     )
 
 
+def _server_paths(agent: str) -> tuple[KeyPath, ...]:
+    if agent == "opencode":
+        return (("mcp", "playwright"), ("mcp", "servers", "playwright"))
+    return (_MCP_PATHS[agent][0][:-1],) if agent == "codex" else _MCP_PATHS[agent]
+
+
+def apply_mcp_server(
+    agent: str,
+    *,
+    command: str,
+    spec: str,
+    executable_path: str | None,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
+) -> FileResult:
+    """Register an absent server, without claiming or changing an existing server."""
+    if agent not in MCP_AGENTS or any(
+        not s or any(ord(c) < 32 or ord(c) == 127 for c in s) for s in (command, spec)
+    ):
+        raise ValueError("invalid MCP agent, command or spec")
+    if executable_path is not None and not Path(executable_path).is_absolute():
+        raise ValueError("executable path must be absolute")
+    env = {PLAYWRIGHT_ENV_VAR: executable_path} if executable_path is not None else None
+    if agent == "opencode":
+        value: dict[str, object] = {"type": "local", "command": [command, spec]}
+        if env is not None:
+            value["environment"] = env
+    else:
+        value = {"command": command, "args": [spec]}
+        if agent == "copilot":
+            value.update({"type": "local", "tools": ["*"]})
+        if env is not None:
+            value["env"] = env
+    paths = _MCP_PATHS[agent]
+    keys = (
+        tuple(SettingKey(path, value[path[-1]]) for path in paths if path[-1] in value)
+        if agent == "codex"
+        else (SettingKey(paths[0], value),)
+    )
+
+    def gate(doc: dict[str, object]) -> tuple[tuple[KeyResult, ...], str | None] | None:
+        for server_path in _server_paths(agent):
+            current = lookup(doc, server_path)
+            if current is not ABSENT:
+                intended = server_path == (paths[0][:-1] if agent == "codex" else paths[0])
+                kind: KeyKind = (
+                    "already" if intended and same_value(current, value) else "set_by_you"
+                )
+                return ((KeyResult(".".join(server_path), kind, _dump(current)),), None)
+        if agent == "opencode":
+            mcp = lookup(doc, ("mcp",))
+            if mcp is not ABSENT and not isinstance(mcp, dict):
+                return ((), "opencode: mcp must be an existing object")
+            if isinstance(mcp, dict) and mcp and "servers" not in mcp:
+                return (
+                    (),
+                    "partial: opencode: your mcp section uses the older shape; "
+                    "add the playwright server yourself (see opencode.ai/docs/mcp-servers)",
+                )
+        return None
+
+    # shortcut: a later pin is kept; upgrade when ownership permits pin migration.
+    # shortcut: Claude may rewrite after our write; coordinate when it offers a lock.
+    return _apply_keys(
+        agent,
+        MCP_SETTING,
+        keys,
+        home=home,
+        platform_os=platform_os,
+        environ=environ,
+        skip_recorded=False,
+        path=mcp_file(agent, home=home, platform_os=platform_os, environ=environ),
+        gate=gate,
+    )
+
+
+def _holds_user_text(text: str, fmt: SettingsFormat, ancestor: KeyPath) -> bool:
+    if fmt != "jsonc":
+        return False
+    _, member = _member_at(_clean(text, fmt), ancestor)
+    source = text[member.value_start : member.value_end]
+    return source != strip_jsonc(source)
+
+
+# Recorded keys under these prefixes form a single ownership unit.
+UNIT_PREFIXES: Final[frozenset[KeyPath]] = frozenset({("mcp_servers", "playwright")})
+
+
+def held_states(
+    entries: Sequence[ConfigWrite], doc: Mapping[str, object]
+) -> tuple[bool | None, ...]:
+    """The per-key revert decision, with Codex server keys held as one unit."""
+    states = [key_held(lookup(dict(doc), entry.key_path), entry.value) for entry in entries]
+    for prefix in UNIT_PREFIXES:
+        indices = [i for i, entry in enumerate(entries) if entry.key_path[:2] == prefix]
+        group = [states[i] for i in indices]
+        if (
+            group
+            and not all(state is True for state in group)
+            and not all(state is None for state in group)
+        ):
+            for i in indices:
+                if states[i] is not None:
+                    states[i] = False
+    return tuple(states)
+
+
 def _revert_pass(
     text: str,
     fmt: SettingsFormat,
@@ -1086,11 +1246,11 @@ def _revert_pass(
 ) -> tuple[str, tuple[KeyResult, ...]]:
     """Revert the entries newest first. A key whose value is no longer ours is kept and reported."""
     results: list[KeyResult] = []
-    for entry in reversed(entries):
+    states = held_states(entries, parse_settings(text, fmt))
+    for entry, held in reversed(tuple(zip(entries, states, strict=True))):
         key = table[entry.key_path]
         name = ".".join(entry.key_path)
         current = lookup(parse_settings(text, fmt), entry.key_path)
-        held = key_held(current, key.value)
         if held is None:
             continue
         if not held:
@@ -1102,12 +1262,16 @@ def _revert_pass(
             # A parent object we created that holds only our key goes with it; the guard
             # would refuse to leave an empty object behind as a child-only removal.
             parent = entry.key_path[:-1]
+            expected: object = {entry.key_path[-1]: key.value}
+            if fmt != "toml" and entry.created_levels:
+                parent = entry.key_path[: len(entry.key_path) - len(entry.created_levels)]
+                for level in reversed(entry.created_levels[1:]):
+                    expected = {level: expected}
             if (
                 entry.created_parent
                 and parent
-                and same_value(
-                    lookup(parse_settings(text, fmt), parent), {entry.key_path[-1]: key.value}
-                )
+                and same_value(lookup(parse_settings(text, fmt), parent), expected)
+                and not _holds_user_text(text, fmt, parent)
             ):
                 try:
                     text = remove_key(text, fmt, parent, fragment=entry.fragment)
@@ -1116,7 +1280,10 @@ def _revert_pass(
                     # keep the header and their lines (still guarded by the re-parse)
                     text = remove_key(text, fmt, entry.key_path)
             else:
-                text = remove_key(text, fmt, entry.key_path, fragment=entry.fragment)
+                fragment = entry.fragment
+                if entry.created_parent and parent and _holds_user_text(text, fmt, parent):
+                    fragment = None
+                text = remove_key(text, fmt, entry.key_path, fragment=fragment)
             results.append(KeyResult(name, "removed", _dump(key.value)))
     return text, tuple(results)
 
@@ -1230,12 +1397,21 @@ def _revert_once(
 
 
 def _agent_files(
-    agent: str, *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+    agent: str,
+    *,
+    home: Path,
+    platform_os: str,
+    environ: Mapping[str, str] | None = None,
+    setting: str = "",
 ) -> tuple[str, ...]:
-    """Every file this agent's settings may live in; a ledger naming another is not followed."""
-    path = adapters(home, platform_os=platform_os, environ=environ)[agent].config_path
+    """Every file this setting may live in; a ledger naming another is not followed."""
+    path = (
+        mcp_file(agent, home=home, platform_os=platform_os, environ=environ)
+        if setting == MCP_SETTING
+        else adapters(home, platform_os=platform_os, environ=environ)[agent].config_path
+    )
     if agent == "opencode":
-        return (str(path), str(path.with_name("opencode.jsonc")))
+        return (str(path.with_name("opencode.json")), str(path.with_name("opencode.jsonc")))
     return (str(path),)
 
 
@@ -1249,7 +1425,9 @@ def _revert_file(
     environ: Mapping[str, str] | None = None,
 ) -> FileResult:
     fmt = _format(agent)
-    if file not in _agent_files(agent, home=home, platform_os=platform_os, environ=environ):
+    if file not in _agent_files(
+        agent, home=home, platform_os=platform_os, environ=environ, setting=setting
+    ):
         return FileResult(agent, setting, Path(file), fmt, refused=NOT_A_SETTINGS_FILE)
     keys = (*setting_keys(agent, setting, platform_os), *RETIRED_KEYS.get((agent, setting), ()))
     table = {key.path: key for key in keys}
@@ -1282,6 +1460,53 @@ def revert_group(
         _revert_file(agent, setting, file, home=home, platform_os=platform_os, environ=environ)
         for file in files
     )
+
+
+def revert_mcp(
+    *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+) -> tuple[FileResult, ...]:
+    """Revert the MCP registrations and Claude's optional environment key."""
+    return tuple(
+        result
+        for agent, setting in (*((a, MCP_SETTING) for a in MCP_AGENTS), ("claude", MCP_ENV_SETTING))
+        for result in revert_group(
+            agent, setting, home=home, platform_os=platform_os, environ=environ
+        )
+    )
+
+
+def mcp_server_present(
+    agent: str, *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+) -> bool:
+    path = mcp_file(agent, home=home, platform_os=platform_os, environ=environ)
+    doc, _ = _read_document(
+        agent, path, _format(agent), home=home, platform_os=platform_os, environ=environ
+    )
+    return doc is not None and any(lookup(doc, p) is not ABSENT for p in _server_paths(agent))
+
+
+def claude_plugin_enabled(
+    *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+) -> bool:
+    path = settings_file("claude", home=home, platform_os=platform_os, environ=environ)
+    doc, _ = _read_document(
+        "claude", path, "json", home=home, platform_os=platform_os, environ=environ
+    )
+    plugins = lookup(doc, ("enabledPlugins",)) if doc is not None else ABSENT
+    return isinstance(plugins, dict) and any(
+        isinstance(k, str) and k.startswith("playwright@") and v is True
+        for k, v in cast(dict[object, object], plugins).items()
+    )
+
+
+def claude_env_set(
+    *, home: Path, platform_os: str, environ: Mapping[str, str] | None = None
+) -> bool:
+    path = settings_file("claude", home=home, platform_os=platform_os, environ=environ)
+    doc, _ = _read_document(
+        "claude", path, "json", home=home, platform_os=platform_os, environ=environ
+    )
+    return doc is not None and lookup(doc, ("env", PLAYWRIGHT_ENV_VAR)) is not ABSENT
 
 
 class SettingsUnreadable(OSError):
