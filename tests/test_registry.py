@@ -301,7 +301,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     # moving between `both` and `ai`, which the set equality above cannot
     # see -- neither set mentions `ai`.
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
-        "both": 50,  # Phase 24 adds herdr, unzip and zip (audience both)
+        "both": 52,  # Phase 32 adds Xcode CLT and gh-stack
         "ai": 8,
         "human": 31,  # Phase 31 adds iTerm2 and herdr-app
     }
@@ -569,7 +569,7 @@ def test_brew_bootstrap_stanzas_declare_their_prefix() -> None:
     assert linux.params["writable_prefix"] == "/home/linuxbrew"
     assert all("writable_prefix" in m.params for m in brew.methods)
     declaring = {t.id for t in tools if any("writable_prefix" in m.params for m in t.methods)}
-    assert declaring == {"brew"}
+    assert declaring == {"brew", "xcode-clt"}
 
 
 def test_fd_resolves_per_platform() -> None:
@@ -797,7 +797,7 @@ def test_download_tools_resolve_brew_then_github_release_on_macos() -> None:
 # patch macOS's ancient system bash, so it has nothing to install on Linux
 # (already at a modern bash). vscode/sublime/jetbrains-toolbox all gained
 # official Linux tarball methods -- see their registry entries.
-MACOS_ONLY = {"gnu-bash", "iterm2"}
+MACOS_ONLY = {"gnu-bash", "iterm2", "xcode-clt"}
 # Apple Containers: Homebrew itself requires macos>=26 and arch=arm64. Membership
 # means the tool cannot work on that platform+arch, not that packaging is inconvenient.
 MACOS_ARM64_ONLY = {"container", "podman"}
@@ -1230,7 +1230,7 @@ def test_drawio_desktop_is_the_only_drawio_row() -> None:
     tools = _tools_by_id()
     assert "drawio-cli" not in tools
     assert tools["drawio-desktop"].audience == "both"
-    assert len(tools) == 89  # Phase 31 adds iTerm2 and herdr-app
+    assert len(tools) == 91  # Phase 32 adds Xcode CLT and gh-stack
 
 
 def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
@@ -1283,9 +1283,9 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # (ROADMAP Phases 7 and 8 both will) must update these counts in the same
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
-        "system": 28,  # Phase 24 adds unzip and zip (SDKMAN prerequisites)
+        "system": 29,  # Phase 32 adds Xcode CLT
         "ai": 9,
-        "user": 52,  # Phase 31 adds iTerm2 and herdr-app
+        "user": 53,  # Phase 32 adds gh-stack
     }
 
 
@@ -2849,6 +2849,12 @@ def test_registry_rows_carry_no_dead_attribution_keys() -> None:
 # None means the key is absent. Empty os/arch is the single-stanza case. The key set
 # must equal the registry's script stanzas (test_every_script_stanza_has_lifecycle_data).
 SCRIPT_LIFECYCLE_DATA: dict[tuple[str, tuple[str, ...], tuple[str, ...]], dict[str, object]] = {
+    ("xcode-clt", ("macos",), ()): {"paths": None, "remove": None, "update": None},
+    ("gh-stack", (), ()): {
+        "paths": ["~/.local/share/gh/extensions/gh-stack/"],
+        "remove": None,
+        "update": ["gh", "extension", "upgrade", "stack"],
+    },
     ("opencode", (), ()): {
         "paths": ["~/.opencode/bin/opencode", "~/.opencode/bin/opencode2"],
         "remove": ["opencode2", "service", "stop"],

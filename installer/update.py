@@ -295,6 +295,16 @@ def update_refusal(tool: Tool, ownership: ManagerOwnership) -> UpdateOutcome | N
             detail=ownership.unknown_reason or _FALLBACK_UNKNOWN,
         )
     method = ownership.method
+    if method is not None and method.kind == "script" and method.params.get("handoff"):
+        return UpdateOutcome(
+            tool_id=tool.id,
+            status="unsupported",
+            owner=ownership.owner,
+            detail=(
+                "Apple's Software Update (System Settings) updates the Command Line Tools; "
+                "the installer never runs it"
+            ),
+        )
     if method is not None and method.kind == "sdkman":
         return UpdateOutcome(
             tool_id=tool.id,

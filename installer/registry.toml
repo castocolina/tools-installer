@@ -3481,3 +3481,52 @@ sha256 = "8994cd728b5fd6eac5da62fa622e68882eeb51ed5d0bec019de4d4a8672b73d0"
 app = "draw.io.app"
 cli = "Contents/MacOS/draw.io"
 cli_name = "drawio"
+
+# Verified 2026-11-21: detect-only; Homebrew probes
+# /Library/Developer/CommandLineTools/usr/bin/git for CLT. xcode-select is always
+# present, so xcode-clt is a probe name nothing creates. Xcode.app without CLT
+# reads missing with the hand-off (D-02). The hand-off is code-owned: nothing
+# runs the install command and no receipt is written. A Homebrew requires edge
+# is deferred to its own todo; real-Mac behavior remains a UAT line.
+[[tool]]
+id = "xcode-clt"
+name = "Xcode Command Line Tools"
+category = "dev"
+cmd = "xcode-clt"
+priority = "P1"
+audience = "both"
+tier = "system"
+verified = 2026-11-21
+desc = "Apple's compiler and git tools; detected only, you run the install command shown."
+[[tool.method]]
+kind = "script"
+os = ["macos"]
+detect_path = "/Library/Developer/CommandLineTools/usr/bin/git"
+writable_prefix = "/Library/Developer/CommandLineTools"
+handoff = "xcode-clt"
+
+# Verified 2026-11-21: gh 2.101.0, scratch HOME, no token, stdin closed: install and repeat exit 0;
+# list, upgrade stack and remove stack exit 4 with "please run: gh auth login", never prompting.
+# Upstream skips the auth check only on install. Detection uses the manifest (D-10, needs confirmation).
+# Removal deletes the receipt-proven tree: _recipe_argv cannot run gh without a proven leaf
+# (D-11, needs confirmation). github/gh-stack v0.3.0 is precompiled; gh writes manifest.yml.
+# GH_DATA_DIR or XDG_DATA_HOME relocation changes the path; macOS ~/.local/share/gh is assumed (Mac UAT).
+# is_installed checks PATH before detect_path; standalone gh-stack must not imply this extension.
+# Detection is the manifest plus a probe name nothing creates: gh-stack-extension on PATH still reads present.
+[[tool]]
+id = "gh-stack"
+name = "GitHub Stack"
+category = "git"
+cmd = "gh-stack-extension"
+priority = "P3"
+audience = "both"
+tier = "user"
+verified = 2026-11-21
+requires = ["gh"]
+desc = "GitHub CLI extension for stacked pull requests."
+[[tool.method]]
+kind = "script"
+install = ["gh", "extension", "install", "https://github.com/github/gh-stack"]
+detect_path = "~/.local/share/gh/extensions/gh-stack/manifest.yml"
+paths = ["~/.local/share/gh/extensions/gh-stack/"]
+update = ["gh", "extension", "upgrade", "stack"]

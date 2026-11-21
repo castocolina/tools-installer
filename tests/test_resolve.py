@@ -606,6 +606,7 @@ _FIRST_METHOD: dict[str, dict[str, str | None]] = {
         "fx": "brew",
         "fzf": "brew",
         "gh": "brew",
+        "gh-stack": "script",
         "ghostty": "cask",
         "git": "brew",
         "gitleaks": "brew",
@@ -662,6 +663,7 @@ _FIRST_METHOD: dict[str, dict[str, str | None]] = {
         "yq": "brew",
         "zip": "brew",
         "zoxide": "brew",
+        "xcode-clt": "script",
         "zsh": "brew",
     },
     "fedora-mutable": {
@@ -697,6 +699,7 @@ _FIRST_METHOD: dict[str, dict[str, str | None]] = {
         "fx": "brew",
         "fzf": "brew",
         "gh": "brew",
+        "gh-stack": "script",
         "ghostty": "tarball",
         "git": "brew",
         "gitleaks": "brew",
@@ -753,6 +756,7 @@ _FIRST_METHOD: dict[str, dict[str, str | None]] = {
         "yq": "brew",
         "zip": "brew",
         "zoxide": "brew",
+        "xcode-clt": None,
         "zsh": "brew",
     },
     "fedora-immutable": {
@@ -788,6 +792,7 @@ _FIRST_METHOD: dict[str, dict[str, str | None]] = {
         "fx": "brew",
         "fzf": "brew",
         "gh": "brew",
+        "gh-stack": "script",
         "ghostty": "tarball",
         "git": "brew",
         "gitleaks": "brew",
@@ -844,6 +849,7 @@ _FIRST_METHOD: dict[str, dict[str, str | None]] = {
         "yq": "brew",
         "zip": "brew",
         "zoxide": "brew",
+        "xcode-clt": None,
         "zsh": "brew",
     },
     "debian": {
@@ -879,6 +885,7 @@ _FIRST_METHOD: dict[str, dict[str, str | None]] = {
         "fx": "github_release",
         "fzf": "github_release",
         "gh": "github_release",
+        "gh-stack": "script",
         "ghostty": "tarball",
         "git": "apt",
         "gitleaks": "github_release",
@@ -935,6 +942,7 @@ _FIRST_METHOD: dict[str, dict[str, str | None]] = {
         "yq": "github_release",
         "zip": "apt",
         "zoxide": "github_release",
+        "xcode-clt": None,
         "zsh": "apt",
     },
 }
