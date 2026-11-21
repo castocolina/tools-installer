@@ -28,6 +28,7 @@ import pytest
 from installer import (
     app,
     executors,
+    herdr_app_keys,
     iterm2_profile,
     locations,
     post_install,
@@ -140,6 +141,17 @@ def no_iterm2_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         raise CommandError(list(argv), 127, detail="no defaults in tests")
 
     monkeypatch.setattr(iterm2_profile, "iterm2_defaults", unavailable)
+
+
+@pytest.fixture(autouse=True)
+def pinned_herdr_app_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test runs the real binary; the seed sees the pin unless a test replaces the seam."""
+
+    def pinned(platform_os: str) -> str:
+        del platform_os
+        return herdr_app_keys.HERDR_APP_DEFAULTS_VERSION
+
+    monkeypatch.setattr(herdr_app_keys, "herdr_app_version", pinned)
 
 
 @pytest.fixture(autouse=True)
