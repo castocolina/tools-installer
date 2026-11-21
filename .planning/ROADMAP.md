@@ -197,7 +197,32 @@ Plans:
   3. The Herdr desktop app is a catalog entry distinct from `herdr`: a user-scope `install.sh` with no sudo on Linux and the cask on Apple Silicon macOS (unavailable on Intel macOS); installing or removing one entry leaves the other's binaries and `~/.config/herdr` intact.
   4. The Herdr desktop app's keys files meet the defaults on both OSes; on Linux Ctrl+Shift+K clears and the displaced picker binding is named in the install note, and a binding the user defined is kept and reported as `partial: kept yours`.
 
-**Plans**: TBD
+**Plans:** 8 plans
+
+Plans:
+**Wave 1**
+- [ ] 31-01-PLAN.md — Tracer: the typed ownership union (`WholeFile`, `OwnedKeys`, `DefaultProfile` hook), dispatch at the three keys entry points and both generic mechanisms proved on fixture rows; the four region rows untouched (NTERM-02, NTERM-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 31-02-PLAN.md — iTerm2 pure core: the Dynamic Profile generator and goldens, the parent key-map merge, the one `defaults` seam, the default-profile hook functions and the four-state before/after golden (NTERM-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 31-03-PLAN.md — The iTerm2 entry end to end: registry cask entry, `TERMINAL_KEYS["iterm2"]`, skill row, forced pins, and the restore of the previous default wired before the cask removal; lifecycle through the production functions (NTERM-02)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 31-04-PLAN.md — herdr-app data and pure logic: the pinned vendor default keys files, the keys path, the owned keys, the validator, the app's chord grammar and the user-binding detector (NTERM-03)
+
+**Wave 5** *(blocked on Wave 4 completion; shares `installer/terminal_keys.py` and the registry with 31-03)*
+- [ ] 31-05-PLAN.md — The herdr-app entry end to end: script and cask entry, `NO_MACOS_INTEL`, `TERMINAL_KEYS["herdr-app"]`, skill row, forced pins, goldens and lifecycle through the production functions (NTERM-03)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 31-06-PLAN.md — The in-container driver for the herdr-app install and removal proof: verdict functions, byte isolation of the multiplexer in both orders, target-local residue allowance; host tests only (NTERM-03)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+- [ ] 31-07-PLAN.md — The `herdr-app` container target and its exclusion from the generic all-pass; proved on the host with a stubbed `ct`; the orchestrator runs the real target (NTERM-03)
+
+**Wave 8** *(blocked on Wave 7 completion and the orchestrator's recorded run)*
+- [ ] 31-08-PLAN.md — Container evidence in the registry comment and the skill row behind a hard gate on the recorded `herdr-app-container: PASS` line, and the catalog consistency guards for the two JSON-mode entries (NTERM-02, NTERM-03)
 
 ### Phase 32: Onboard Xcode CLT, AWS CLI, Bruno, gh-stack and Playwright MCP
 
