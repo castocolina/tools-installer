@@ -98,3 +98,14 @@ Live facts that changed the SPEC (amended in this commit): the herdr app has one
 ### Reviewed Todos (not folded)
 None other matched.
 </deferred>
+
+<amendments>
+## Orchestrator amendments (2026-11-21, planning run; all provisional, need confirmation)
+
+Phases 27 to 30 executed after this CONTEXT was written; the research (`31-RESEARCH.md`, CONTEXT Reconciliation) corrected four decisions against source and the plans follow the corrected versions. The original text above is kept; these lines govern.
+
+- **31 D-07 (message):** at iTerm2 v3.7.8 a malformed Dynamic Profiles file is skipped on its own; it does not block every reload (the docs still claim it does). The installer still validates before writing (exactly one profile with our GUID).
+- **31 D-09 (parent key map):** the key map of the previous default is merged only when it is readable from the exported preferences; when the previous default is itself a Dynamic Profile there is nothing to read, so the Parent GUID is still set, nothing is merged and an install note says so.
+- **31 D-11 (runner and ordering):** the `defaults` calls go through one module seam (`iterm2_profile.iterm2_defaults`, the `wezterm_show_keys` pattern) instead of an injected runner; the previous default is restored BEFORE the cask removal (a pre-removal call in `remove_tool`) because the removal quits iTerm2, the profile file is deleted after the removal, and where no pre-removal point exists an uninstall note names the limit.
+- **31 D-16 (chord aliases):** the herdr app chord grammar accepts `cmd`, `super`, `win` and `secondary` and does not accept `option` or `platform`; normalization uses the accepted names and neither alias is written or compared.
+</amendments>

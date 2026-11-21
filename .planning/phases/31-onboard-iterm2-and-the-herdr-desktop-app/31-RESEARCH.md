@@ -482,7 +482,9 @@ No stdlib behavior this phase relies on is known to differ: `json.dumps(..., sor
 | A8 | `audience = "human"` and `priority = "P3"` for both entries | Registry | Count pins change differently; owner preference |
 | A9 | Dark-green palette values | D-10 | Owner rejects colors at UAT; values are discretion until named |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+Each recommendation below was adopted by the plans and the orchestrator decisions (31-CONTEXT amendments, 2026-11-21).
 
 1. **Uninstalling iTerm2 from inside iTerm2 (Pitfall 1).** What we know: the cask quits iTerm2 before removal, and strip runs after removal. What's unclear: whether the owner prefers a hand-off ("run the uninstall from another terminal") or a pre-removal restore when running inside iTerm2. Recommendation: hand off; it never leaves a half-restored state.
 2. **Parent that is a dynamic profile (Pitfall 4).** Recommendation: set the Parent GUID, merge nothing, report `partial`.
