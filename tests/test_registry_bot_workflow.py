@@ -11,6 +11,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 BOT_WORKFLOW = ROOT / ".github" / "workflows" / "registry-bot.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+RUNBOOK = ROOT / "docs" / "registry-bot-proof.txt"
 REQUIRED_CHECKS: tuple[str, str] = (
     "validate & test on ubuntu-latest",
     "validate & test on macos-latest",
@@ -466,6 +467,273 @@ def test_no_run_step_exposes_a_credential() -> None:
             for text in ("secrets.", "GH_TOKEN", "GITHUB_TOKEN", "printenv", "set -x", "xtrace")
         )
     assert BOT_WORKFLOW.read_text().count("github.token") == 1
+
+
+def _runbook() -> str:
+    return RUNBOOK.read_text(encoding="utf-8")
+
+
+def _section(text: str, title: str) -> str:
+    rest = text.split(f"== {title}\n", 1)[1]
+    return rest.split("\n== ", 1)[0]
+
+
+def test_the_runbook_has_the_part_one_and_two_commands() -> None:
+    text = _runbook()
+    for part in (
+        'git ls-remote --heads origin "refs/heads/bot/registry-$DATE"',
+        'git fetch origin "+refs/heads/bot/registry-$DATE:refs/remotes/origin/bot/registry-$DATE"',
+        'SHA=$(git rev-parse "refs/remotes/origin/bot/registry-$DATE")',
+        'git rev-parse "$SHA^"',
+        'gh run list --workflow ci.yml --commit "$SHA" --json event,conclusion,headSha,status',
+        "gh api repos/$REPO/commits/$SHA/check-runs",
+        "gh api repos/$REPO/branches/main/protection "
+        "--jq '.required_status_checks.checks[].context'",
+        "gh issue list --label registry-bot --state open",
+        "nothing to publish",
+        "workflow_dispatch",
+    ):
+        assert part in text
+    assert (
+        sum("gh workflow run registry-bot.yml --ref main" in line for line in text.splitlines())
+        == 2
+    )
+    assert "--candidate" not in text and "proof/registry-bot" not in text
+
+
+def test_the_runbook_names_the_required_checks_exactly() -> None:
+    text = _runbook()
+    assert all(check in text for check in REQUIRED_CHECKS)
+
+
+def test_the_runbook_never_targets_the_default_branch() -> None:
+    text = _runbook()
+    assert MAIN_TARGET.search(text) is None
+    assert not any(part in text for part in ("sudo", "--no-verify", "SKIP=", "core.hooksPath"))
+    for line in text.splitlines():
+        if "git push" in line:
+            assert re.search(r"\bmain\b", line) is None
+            push = line.split("git push", 1)[1].split(";", 1)[0]
+            assert re.search(r"--force(?!-with-lease)", push) is None
+
+
+def test_every_ref_the_runbook_creates_is_deleted_by_its_cleanup() -> None:
+    text = _runbook()
+    writes = _section(text, "What this writes to the remote")
+    cleanup = _section(text, "Cleanup")
+    for ref, prefix in (
+        ("bot/registry-$DATE", "refs/heads/bot/registry-"),
+        ("proof/target-$DATE", "refs/heads/proof/"),
+        ("landing/registry-$DATE", "refs/heads/landing/"),
+    ):
+        assert any(ref in line and "removed in Cleanup" in line for line in writes.splitlines())
+        assert any(prefix in line and "case" not in line for line in cleanup.splitlines())
+
+
+def test_the_runbook_preflight_stops_on_existing_bot_work() -> None:
+    before = _section(_runbook(), "Before you start")
+    for part in (
+        'git ls-remote --heads origin "refs/heads/bot/registry-*"',
+        "gh issue list --label registry-bot --state open --json number --jq length",
+        'git ls-remote --heads origin "refs/heads/proof/*" "refs/heads/landing/*"',
+    ):
+        assert part in before
+    assert any(line.startswith("STOP") for line in before.splitlines())
+    pushes = [line for line in before.splitlines() if "git push" in line]
+    assert len(pushes) == 1 and pushes[0].startswith("push_exact()")
+    assert "gh workflow run" not in before
+
+
+def test_the_runbook_cleanup_removes_the_whole_proof_namespace() -> None:
+    text = _runbook()
+    cleanup = _section(text, "Cleanup")
+    _index(
+        cleanup,
+        "set -o pipefail",
+        'listing=$(git ls-remote --heads origin "refs/heads/bot/registry-*" '
+        '"refs/heads/proof/*" "refs/heads/landing/*")',
+        'case "$ref" in',
+        "refs/heads/bot/registry-*|refs/heads/proof/*|refs/heads/landing/*)",
+        'git push --force-with-lease="$ref:$sha" --delete origin "$ref"',
+        'done <<< "$listing"',
+        "open=$(gh issue list --label registry-bot --state open --json number --jq '.[].number')",
+        "for n in $open; do",
+        'gh issue close "$n"',
+    )
+    assert "the preflight proved" in cleanup and "rollover" in cleanup
+    assert "| while" not in text and text.count("gh issue close") == 1
+    assert not any(
+        "gh issue close" in line and ("NUMBER" in line or "$ISSUE" in line)
+        for line in text.splitlines()
+    )
+
+
+def test_the_runbook_stops_without_drift_identifies_the_bot_commit_and_stops_at_midnight() -> None:
+    text = _runbook()
+    part1 = _section(text, "Part 1: run the bot on the default branch")
+    part2 = _section(text, "Part 2: read the check names and rerun the same day")
+    assert any(line.startswith("STOP") and "no drift" in line for line in part1.splitlines())
+    assert "git log -1 --format" in part1 and 'git diff --stat "$BASE" "$SHA"' in part1
+    assert any(line.startswith("STOP") and "push" in line for line in part2.splitlines())
+    for part in (part1, part2):
+        checks = [
+            line for line in part.splitlines() if line.startswith('[ "$(date -u +%F)" = "$DATE" ]')
+        ]
+        assert checks and all("STOP" in line for line in checks)
+    assert "re-export" not in text
+
+
+def test_the_runbook_binds_its_evidence_to_run_ids() -> None:
+    text = _runbook()
+    for part in (
+        "BEFORE=$(gh run list --workflow registry-bot.yml --event workflow_dispatch "
+        "--limit 1 --json databaseId --jq '.[0].databaseId // 0')",
+        "BOT_RUN=$(gh run list --workflow registry-bot.yml --event workflow_dispatch "
+        "--limit 1 --json databaseId --jq '.[0].databaseId')",
+        'gh run watch "$BOT_RUN" --exit-status',
+        'RUN_ID=$(gh run list --workflow ci.yml --commit "$SHA" --event workflow_dispatch '
+        "--json databaseId --jq '.[0].databaseId // empty')",
+        'gh run watch "$RUN_ID" --exit-status',
+        "gh run view \"$RUN_ID\" --json jobs --jq '.jobs[] | {name, conclusion}'",
+        'gh run watch "$BOT_RUN2" --exit-status',
+        'gh run view "$BOT_RUN2" --log | grep "nothing to publish"',
+    ):
+        assert part in text
+    lines = text.splitlines()
+    for line in lines:
+        if "gh run watch" in line:
+            assert "--exit-status" in line and any(
+                name in line
+                for name in ('"$BOT_RUN"', '"$BOT_RUN2"', '"$RUN_ID"', '"$LANDING_RUN"')
+            )
+        if "--limit 1" in line:
+            assert line.startswith(("BEFORE=", "BOT_RUN=", "BOT_RUN2="))
+        if line.startswith("[ ") and " || echo" in line:
+            assert "STOP" in line
+    for guard in (
+        '"$BOT_RUN" -gt "$BEFORE"',
+        '"$BOT_RUN2" -gt "$BEFORE"',
+        '-n "$RUN_ID"',
+        '"$N" -ge 1',
+    ):
+        assert any(line.startswith("[ ") and guard in line and " || echo" in line for line in lines)
+
+
+def test_the_runbook_gates_the_protection_write_on_owner_approval_and_names_both_options() -> None:
+    text = _runbook()
+    for part in ("Option A", "Option B", "OWNER APPROVAL REQUIRED", "STOP"):
+        assert part in text
+    puts = [line for line in text.splitlines() if "-X PUT" in line]
+    assert len(puts) == 1
+    assert "OWNER APPROVAL REQUIRED" in puts[0] and "proof/target-$DATE" in puts[0]
+    assert not any("-X" in line and "branches/main" in line for line in text.splitlines())
+
+
+def test_the_runbook_removes_the_temporary_protection_and_reads_it_back() -> None:
+    cleanup = _section(_runbook(), "Cleanup")
+    deletes = [line for line in _runbook().splitlines() if "-X DELETE" in line]
+    assert len(deletes) == 1
+    assert "repos/$REPO/branches/proof/target-$DATE/protection" in deletes[0]
+    _index(
+        cleanup,
+        deletes[0],
+        "404",
+        'listing=$(git ls-remote --heads origin "refs/heads/bot/registry-*" '
+        '"refs/heads/proof/*" "refs/heads/landing/*")',
+    )
+
+
+def test_the_runbook_pushes_through_a_worktree_at_the_exact_commit() -> None:
+    text = _runbook()
+    before = _section(text, "Before you start")
+    helper = next(line for line in before.splitlines() if line.startswith("push_exact() {"))
+    for part in (
+        'git worktree add --detach "$wt" "$1"',
+        'git push origin "HEAD:$2"',
+        'git worktree remove --force "$wt"',
+    ):
+        assert part in helper
+    assert "push gate" in before
+    assert [
+        line for line in text.splitlines() if "git push" in line and "--delete" not in line
+    ] == [helper]
+    calls = [line for line in text.splitlines() if 'push_exact "' in line]
+    assert len(calls) == 3
+    assert all(
+        re.fullmatch(r'WRITE {3}push_exact "\$(SHA|BASE)" "refs/heads/[^"]+"', line)
+        for line in calls
+    )
+    _index(
+        text,
+        '"+refs/heads/bot/registry-$DATE:refs/remotes/origin/bot/registry-$DATE"',
+        'WRITE   push_exact "$SHA"',
+    )
+    assert (
+        'gh run list --workflow ci.yml --commit "$SHA" --json event,conclusion,headSha,status'
+        in _section(text, "Part 3: the BOT-02 question")
+    )
+
+
+def test_the_runbook_records_the_dispatch_evidence_before_option_a_final_push() -> None:
+    text = _runbook()
+    final = 'WRITE   push_exact "$SHA" "refs/heads/proof/target-$DATE"'
+    for evidence in (
+        'gh run watch "$RUN_ID" --exit-status',
+        'gh run view "$RUN_ID" --json jobs',
+        "gh api repos/$REPO/commits/$SHA/check-runs",
+        "gh api repos/$REPO/branches/proof/target-$DATE/protection --jq",
+    ):
+        _index(text, evidence, final)
+    assert any(
+        "BEFORE" in line and "ordinary" in line
+        for line in _section(text, "Part 3: the BOT-02 question").splitlines()
+    )
+
+
+def test_the_runbook_keeps_option_b_unverified() -> None:
+    text = _runbook().split("Option B", 1)[1].split("\n== ", 1)[0]
+    for part in (
+        "UNVERIFIED",
+        'LANDING_RUN=$(gh run list --workflow ci.yml --branch "landing/registry-$DATE" '
+        "--commit \"$SHA\" --event push --json databaseId --jq '.[0].databaseId // empty')",
+        'gh run watch "$LANDING_RUN" --exit-status',
+        "gh api repos/$REPO/commits/$SHA/check-runs",
+        'push_exact "$SHA" "refs/heads/landing/registry-$DATE"',
+    ):
+        assert part in text
+
+
+def test_the_runbook_states_what_it_does_not_prove_and_when_bot_02_passes() -> None:
+    text = _runbook()
+    keyword = [line for line in text.splitlines() if "Closes #" in line]
+    assert len(keyword) == 1 and "NOT EXERCISED" in keyword[0]
+    record = _section(text, "Record the result")
+    assert "human_needed" in record and "blocked" in record
+    assert all("accepted" in line for line in record.splitlines() if "passed" in line)
+    assert "recorded owner decision" not in text
+
+
+def test_the_workflow_and_the_runbook_agree_on_the_contract() -> None:
+    text = _runbook()
+    triggers = _triggers(_bot())
+    assert set(triggers) in ({"workflow_dispatch"}, {"schedule", "workflow_dispatch"})
+    if "schedule" in triggers:
+        assert any(entry["cron"] == "37 6 * * 1" for entry in triggers["schedule"])
+    else:
+        assert 'cron: "37 6 * * 1"' in BOT_WORKFLOW.read_text()
+    assert "37 6 * * 1" in text
+
+
+def test_the_runbook_ends_with_the_cron_enabling_and_push_restriction_steps() -> None:
+    last = _runbook().rsplit("== ", 1)[1]
+    for part in (
+        "37 6 * * 1",
+        "registry-bot.yml",
+        "test_the_committed_trigger_set_is_dispatch_only",
+        "needs no edit",
+        "push restriction",
+    ):
+        assert part in last
 
 
 def test_the_header_names_the_trust_boundary() -> None:
