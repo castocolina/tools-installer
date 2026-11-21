@@ -3611,3 +3611,35 @@ kind = "cask"
 os = ["macos"]
 cask = "bruno"
 app = "Bruno.app"
+
+# Verified 2026-11-21: @playwright/mcp@0.0.85 has engines.node >=18, bin playwright-mcp,
+# published 2026-11-09, and no install or postinstall scripts. 0.0.86 (Node >=20,
+# npm latest, published 2026-11-18) is the alternative; D-13 locks 0.0.85, no checkpoint.
+# Pins move by hand or catalog-audit; verify-registry checks only download kinds.
+# Update refuses an exact bun pin: assumed bun records that range; container confirmation pending.
+# The server runs absolute bunx beside bun with @playwright/mcp@0.0.85. Claude's
+# ~/.claude.json mcpServers.playwright requires a confirmed hook_register step;
+# ~/.claude/settings.json env.PLAYWRIGHT_MCP_EXECUTABLE_PATH is for its official plugin only.
+# Cursor uses ~/.cursor/mcp.json, Copilot ~/.copilot/mcp-config.json, OpenCode 2
+# mcp.servers.playwright, and Codex [mcp_servers.playwright]. Pi has no ledger: add manually.
+# Existing playwright entries are kept. Flatpak Chrome goes in each entry's env only on
+# Bazzite (os-release ID or VARIANT_ID), not Silverblue, and only with the wrapper present.
+# Deleted registrations are offered again by the settled read, not the receipt (plan 32-11).
+# Claude's live ~/.claude.json can be rewritten by a running Claude; settled needs the command on PATH.
+[[tool]]
+id = "playwright-mcp"
+name = "Playwright MCP"
+category = "ai"
+cmd = "playwright-mcp"
+priority = "P3"
+audience = "ai"
+tier = "ai"
+verified = 2026-11-21
+requires = ["bun"]
+postinstall = "playwright-mcp-register"
+desc = "Playwright browser automation MCP server, pinned and registered in each present agent host."
+[[tool.method]]
+kind = "bun"
+npm_pkg = "@playwright/mcp"
+versions = { "@playwright/mcp" = "0.0.85" }
+min_node = "18.0.0"

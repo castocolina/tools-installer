@@ -303,7 +303,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     # see -- neither set mentions `ai`.
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
         "both": 53,  # Phase 32 adds Xcode CLT, gh-stack and AWS CLI
-        "ai": 8,
+        "ai": 9,
         "human": 32,  # Phase 32 adds Bruno
     }
 
@@ -1231,7 +1231,7 @@ def test_drawio_desktop_is_the_only_drawio_row() -> None:
     tools = _tools_by_id()
     assert "drawio-cli" not in tools
     assert tools["drawio-desktop"].audience == "both"
-    assert len(tools) == 93  # Phase 32 adds Xcode CLT, gh-stack, AWS CLI and Bruno
+    assert len(tools) == 94  # Phase 32 adds Xcode CLT, gh-stack, AWS CLI, Bruno and Playwright MCP
 
 
 def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
@@ -1285,7 +1285,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     # commit that changes the catalog.
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 29,  # Phase 32 adds Xcode CLT
-        "ai": 9,
+        "ai": 10,
         "user": 55,  # Phase 32 adds gh-stack, AWS CLI and Bruno
     }
 
@@ -2247,7 +2247,7 @@ def test_only_codegraph_tealdeer_and_herdr_declare_a_postinstall_hook() -> None:
     # so the installer runs none of them. rtk's hook was removed 2026-11-02.
     tools = load_tools(REGISTRY)
     for tool in tools:
-        if tool.id in ("codegraph", "tealdeer", "herdr"):  # Phase 24 wires herdr's hook
+        if tool.id in ("codegraph", "tealdeer", "herdr", "playwright-mcp"):
             continue
         assert tool.postinstall is None, f"{tool.id}: unexpected postinstall hook declared"
 
