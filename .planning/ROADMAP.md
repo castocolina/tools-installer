@@ -238,7 +238,7 @@ Plans:
   4. gh-stack installs with `gh extension install https://github.com/github/gh-stack`, reads present from `gh extension list`, updates with `gh extension upgrade stack` and is removed with `gh extension remove stack` *(amended 2026-11-19, 32 D-10, D-11, needs confirmation: present from its manifest file, removed by its proven install folder; list and remove need a login)*; with an unauthenticated `gh` nothing blocks or prompts.
   5. Playwright MCP is registered as the pinned `bunx @playwright/mcp@0.0.85` in each agent host present, an existing `playwright` server entry is left as it was, the Flatpak Chrome path is exported on Bazzite only when the wrapper exists, and a write into `~/.claude/settings.json` asks for consent first.
 
-**Plans:** 10 plans
+**Plans:** 11 plans
 
 Plans:
 **Wave 1**
@@ -254,7 +254,7 @@ Plans:
 - [ ] 32-04-PLAN.md — The settings-ledger MCP writer: a three-level JSON insert and revert, and a merge-safe, receipt-recorded `playwright` server entry per host (Claude, Cursor, Copilot, OpenCode, Codex) with (file, key path) revert pairs and a one-unit Codex revert, plus Claude's env key (ONB-15)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 32-05-PLAN.md — The Playwright MCP entry: the registration hook with Claude behind the confirmed `hook_register` step (bound to the hosts it disclosed), the Bazzite-gated Flatpak Chrome export, the settled read, the removal sweep and the pinned `0.0.85` entry (ONB-15)
+- [ ] 32-05-PLAN.md — The Playwright MCP entry: the registration hook with Claude withheld unless a confirmed host set names it (`confirmed_hosts`), the os-release-gated Bazzite Flatpak Chrome export, the `rereads` flag, the settled read, the removal sweep and the pinned `0.0.85` entry (ONB-15)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 32-06-PLAN.md — The `aws-cli` container target (Fedora with gpg, a no-gpg debian-slim leg), the shared evidence gate and the driver verdicts; proved on the host with a stubbed `ct`; the orchestrator runs the real target (ONB-12)
@@ -269,7 +269,10 @@ Plans:
 - [ ] 32-09-PLAN.md — Container evidence in the registry comments behind a hard gate on the recorded `aws-container: PASS` and `playwright-container: PASS` lines, the reported Bruno result, the skill row and architecture rules, and the catalog consistency guards (ONB-11 to ONB-15)
 
 **Wave 10** *(blocked on Wave 9 completion; independent of the container runs)*
-- [ ] 32-10-PLAN.md — The removal preview of the Playwright MCP entries: the exact host files and keys the sweep reverts, decided with the revert's own grouped Codex rule and allowed-file pairs, and a line naming an outside-home Copilot file (ONB-15)
+- [ ] 32-10-PLAN.md — The removal preview of the Playwright MCP entries: the exact host files and keys the sweep reverts, decided with the revert's own grouped Codex rule and (file, key path, value) eligibility, a line for an unreadable file and a line naming an outside-home Copilot file (ONB-15)
+
+**Wave 11** *(blocked on Wave 10 completion; independent of the container runs)*
+- [ ] 32-11-PLAN.md — The Claude consent route through the reconfigure flow: every `hook_register` step of a consent-bearing hook carries its disclosed `hosts` and the session passes them, the step text names both Claude files and the env key, a late host is not written, and a deleted registration reads pending again (`rereads`) (ONB-15)
 
 ### Phase 33: Registry update bot
 
