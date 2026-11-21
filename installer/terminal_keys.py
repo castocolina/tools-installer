@@ -3,14 +3,30 @@ and strip a terminal's owned keys region the same way for every row."""
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
-from typing import Final
+from typing import Final, cast
 
-from installer.agent_settings import read_settings, remove_created_dirs
+from installer.agent_settings import (
+    ABSENT,
+    SettingsEditRefused,
+    SettingsParseError,
+    delete_if_unchanged,
+    insert_key,
+    key_held,
+    lookup,
+    parse_settings,
+    read_settings,
+    remove_created_dirs,
+    remove_key,
+    replace_value,
+    same_value,
+    write_if_unchanged,
+)
 from installer.atomic import atomic_write_text
 from installer.run import CommandError, run_output
 from installer.terminal_regions import (
@@ -31,6 +47,7 @@ from installer.terminal_regions import (
     WEZTERM_UNVERIFIED,
     KeysPlan,
     Placement,
+    Restored,
     TerminalShellError,
     alacritty_config_path,
     alacritty_keys_plan,
@@ -88,7 +105,7 @@ SameDirectory = Vendor | Writes | NotApplicable
 
 @dataclass(frozen=True)
 class OwnedRegion:
-    """A marker-delimited region owned by the installer; the sole ownership mode until phase 31."""
+    """A marker-delimited region owned by the installer."""
 
     region: str  # Marker name.
     comment: str = "#"  # Marker comment prefix.
@@ -96,8 +113,46 @@ class OwnedRegion:
 
 
 @dataclass(frozen=True)
+class DefaultProfile:
+    before_write: Callable[[str, Path, Mapping[str, str], bool], tuple[str, ...]]
+    after_write: Callable[[str, Path, Mapping[str, str], bool], tuple[str, ...]]
+    restore: Callable[[str, Path, Mapping[str, str], bool], Restored]
+    still_named: Callable[[str, Path, Mapping[str, str]], bool]
+    switch_pending: Callable[[str, Path, Mapping[str, str]], bool]
+
+
+@dataclass(frozen=True)
+class WholeFile:
+    proof: Callable[[str], bool]
+    plan: Callable[[str, str, Path, Path, Mapping[str, str]], KeysPlan]
+    hook: DefaultProfile | None = None
+
+
+OwnedKey = tuple[tuple[str, str], str]
+
+
+@dataclass(frozen=True)
+class OwnedKeys:
+    """Two-level keys in an application-owned JSON file; seed may refuse, pinned is pure."""
+
+    seed: Callable[[str], str]
+    pinned: Callable[[str], str]
+    keys: Callable[[str, Path, Mapping[str, str]], tuple[OwnedKey, ...]]
+    taken: Callable[[str, Mapping[str, object], OwnedKey, tuple[OwnedKey, ...]], str | None]
+
+
+Ownership = OwnedRegion | WholeFile | OwnedKeys
+
+
+def variant_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
+    """A whole-file row uses this no-op for the region renderer's plan field."""
+    del platform_os, text, path
+    return KeysPlan(None)
+
+
+@dataclass(frozen=True)
 class KeysRow:
-    ownership: OwnedRegion  # The region this row owns.
+    ownership: Ownership  # The ownership variant: a region, a whole file or owned keys.
     config_path: Callable[[str, Path, Mapping[str, str]], Path]  # Platform, home, environment.
     plan: Callable[[str, str, Path], KeysPlan]  # Platform, whole file and resolved config path.
     validate: Callable[[str], None]  # Validate the edited whole file.
@@ -375,6 +430,390 @@ def _created_marker(row: KeysRow, home: Path, environ: Mapping[str, str]) -> Pat
     return xdg_data_home(home, environ) / "tools-installer" / row.created_record
 
 
+def _apply_whole_file(
+    row: KeysRow,
+    whole: WholeFile,
+    tool_id: str,
+    platform_os: str,
+    home: Path,
+    environ: Mapping[str, str],
+    *,
+    skip_recorded: bool,
+) -> tuple[tuple[str, ...], str | None]:
+    record = _record(tool_id, home, environ)
+    recorded = skip_recorded and record.exists()
+    path = row.config_path(platform_os, home, environ)
+    marker = _created_marker(row, home, environ)
+    # shortcut: a symlink swap after this check is possible; use O_NOFOLLOW if the folder is shared.
+    if path.is_symlink():
+        return ((), None) if recorded else ((), f"{path.name} is a symlink; left as it is")
+    try:
+        before = read_settings(path)
+        text = snapshot_text(before)
+        if before is not None and not (marker.exists() and whole.proof(text)):
+            return (
+                ((), None)
+                if recorded
+                else ((), f"{path.name} is not the installer's; left as it is")
+            )
+        if (
+            recorded
+            and before is None
+            and not (whole.hook and whole.hook.still_named(platform_os, home, environ))
+        ):
+            return (), None
+        plan = whole.plan(platform_os, text, path, home, environ)
+    except OSError as exc:
+        return ((), None) if recorded else ((), first_line(exc))
+    if plan.refusal is not None:
+        return ((), None) if recorded else ((), plan.refusal)
+    hook = whole.hook
+    before_lines = hook.before_write(platform_os, home, environ, skip_recorded) if hook else ()
+    changed = plan.body is not None and plan.body != text
+    if changed and plan.body is not None:
+        try:
+            # shortcut: interrupted writes leave an unowned file; upgrade if interruptions occur.
+            commit_region(
+                path,
+                before,
+                text,
+                plan.body,
+                validate=row.validate,
+                write=True,
+                created_marker=marker,
+                home=home,
+                bind_path=row.bind_created_path,
+            )
+            record.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(record, "written\n")
+        except OSError as exc:
+            return (), first_line(exc)
+    after_lines = hook.after_write(platform_os, home, environ, skip_recorded) if hook else ()
+    lines = (row.summary, *plan.notes, *plan.conflicts) if changed else ()
+    return (*lines, *before_lines, *after_lines), None
+
+
+def _pending_whole_file(
+    row: KeysRow,
+    whole: WholeFile,
+    tool_id: str,
+    platform_os: str,
+    home: Path,
+    environ: Mapping[str, str],
+) -> str | None:
+    recorded = _record(tool_id, home, environ).exists()
+    path = row.config_path(platform_os, home, environ)
+    if path.is_symlink():
+        return None if recorded else f"{path.name} is a symlink; left as it is"
+    try:
+        before = read_settings(path)
+        text = snapshot_text(before)
+        if before is None:
+            if not recorded or (whole.hook and whole.hook.still_named(platform_os, home, environ)):
+                return KEYS_PENDING
+            return None
+        if not (_created_marker(row, home, environ).exists() and whole.proof(text)):
+            return None if recorded else f"{path.name} is not the installer's; left as it is"
+        if not recorded:
+            return KEYS_PENDING
+        plan = whole.plan(platform_os, text, path, home, environ)
+        if plan.refusal is None and plan.body is not None and plan.body != text:
+            return KEYS_PENDING
+        if whole.hook and whole.hook.switch_pending(platform_os, home, environ):
+            return KEYS_PENDING
+    except OSError as exc:
+        return None if recorded else first_line(exc)
+    return None
+
+
+def _strip_whole_file(
+    row: KeysRow,
+    whole: WholeFile,
+    tool_id: str,
+    platform_os: str,
+    home: Path,
+    environ: Mapping[str, str],
+) -> tuple[str, ...]:
+    path = row.config_path(platform_os, home, environ)
+    marker = _created_marker(row, home, environ)
+    restored = (
+        whole.hook.restore(platform_os, home, environ, True) if whole.hook else Restored((), True)
+    )
+    warnings = list(restored.lines)
+    if not restored.confirmed:
+        warnings.append(
+            f"{tool_id}: {path.name} kept because the default profile was not restored; "
+            "reinstall the tool and uninstall it again to retry"
+        )
+        return tuple(warnings)
+    try:
+        if path.is_symlink():
+            warnings.append(f"{tool_id}: {path.name} is a symlink; left as it is")
+            return tuple(warnings)
+        before = read_settings(path)
+        if before is not None:
+            if marker.exists() and whole.proof(snapshot_text(before)):
+                directories = tuple(marker.read_text(errors="replace").splitlines()[1:])
+                delete_if_unchanged(path, before)
+                remove_created_dirs(directories, home)
+            else:
+                warnings.append(f"{tool_id}: {path.name} is not the installer's; left as it is")
+        _record(tool_id, home, environ).unlink(missing_ok=True)
+        marker.unlink(missing_ok=True)
+        created_path_record(marker).unlink(missing_ok=True)
+    except OSError as exc:
+        warnings.append(f"{tool_id}: {path.name}: {first_line(exc)}")
+    return tuple(warnings)
+
+
+@dataclass(frozen=True)
+class _OwnedRecord:
+    keys: tuple[tuple[str, str, str], ...] = ()
+    deleted: tuple[tuple[str, str], ...] = ()
+    path: str | None = None
+
+
+def _string_entry(value: object, size: int) -> bool:
+    if not isinstance(value, list):
+        return False
+    items = cast(list[object], value)
+    return len(items) == size and all(isinstance(item, str) for item in items)
+
+
+def _owned_record(path: Path) -> _OwnedRecord:
+    try:
+        data: object = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            return _OwnedRecord()
+        obj = cast(dict[str, object], data)
+        keys = obj.get("keys")
+        deleted = obj.get("deleted")
+        name = obj.get("path")
+        if not isinstance(keys, list) or not isinstance(deleted, list) or not isinstance(name, str):
+            return _OwnedRecord()
+        key_items = cast(list[object], keys)
+        deleted_items = cast(list[object], deleted)
+        if not all(_string_entry(x, 3) for x in key_items):
+            return _OwnedRecord()
+        if not all(_string_entry(x, 2) for x in deleted_items):
+            return _OwnedRecord()
+        triples = [cast(list[str], x) for x in key_items]
+        pairs = [cast(list[str], x) for x in deleted_items]
+        return _OwnedRecord(
+            tuple((x[0], x[1], x[2]) for x in triples), tuple((x[0], x[1]) for x in pairs), name
+        )
+    except (OSError, ValueError):
+        return _OwnedRecord()
+
+
+# shortcut: a single-path ledger forgets old paths; use one ledger per path if moves become common.
+def _write_owned_record(
+    record: Path, path: Path, keys: list[tuple[str, str, str]], deleted: list[tuple[str, str]]
+) -> None:
+    text = (
+        json.dumps(
+            {
+                "deleted": sorted(list(item) for item in deleted),
+                "keys": sorted(list(item) for item in keys),
+                "path": str(path),
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    try:
+        if record.read_text() == text:
+            return
+    except FileNotFoundError:
+        pass
+    record.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(record, text)
+
+
+def _parse_owned(text: str) -> dict[str, object]:
+    try:
+        return parse_settings(text, "json")
+    except SettingsParseError as exc:
+        raise TerminalShellError("the file does not parse; left as it is") from exc
+
+
+def _apply_owned_keys(
+    row: KeysRow,
+    owned: OwnedKeys,
+    tool_id: str,
+    platform_os: str,
+    home: Path,
+    environ: Mapping[str, str],
+    *,
+    skip_recorded: bool,
+) -> tuple[tuple[str, ...], str | None]:
+    path = row.config_path(platform_os, home, environ)
+    record = _record(tool_id, home, environ)
+    old = _owned_record(record)
+    if old.path is not None and old.path != str(path):
+        old = _OwnedRecord()
+        recorded = False
+    else:
+        recorded = skip_recorded and record.exists()
+    if path.is_symlink():
+        return ((), None) if recorded else ((), f"{path.name} is a symlink; left as it is")
+    try:
+        before = read_settings(path)
+        original = snapshot_text(before)
+        text = original if original.strip() else owned.seed(platform_os)
+        document = _parse_owned(text)
+        row.validate(text)
+    except OSError as exc:
+        return ((), None) if recorded else ((), first_line(exc))
+    held = {(s, k): v for s, k, v in old.keys}
+    old_entries = tuple(((s, k), v) for s, k, v in old.keys)
+    written: list[tuple[str, str, str]] = []
+    deleted: list[tuple[str, str]] = []
+    conflicts: list[str] = []
+    changed = False
+    try:
+        for key, value in owned.keys(platform_os, home, environ):
+            current = lookup(document, key)
+            prior = held.get(key)
+            if prior is not None and same_value(current, prior):
+                if not same_value(prior, value):
+                    text = replace_value(text, "json", key, value)
+                    changed = True
+                written.append((*key, value))
+            elif current is ABSENT and (prior is not None or key in old.deleted) and skip_recorded:
+                deleted.append(key)
+            else:
+                line = owned.taken(platform_os, document, (key, value), old_entries)
+                if line is not None:
+                    conflicts.append(line)
+                elif current is ABSENT:
+                    text = insert_key(text, "json", key, value).text
+                    written.append((*key, value))
+                    changed = True
+            document = _parse_owned(text)
+        commit_region(
+            path,
+            before,
+            original,
+            text,
+            validate=row.validate,
+            write=True,
+            created_marker=_created_marker(row, home, environ),
+            home=home,
+            bind_path=row.bind_created_path,
+        )
+        _write_owned_record(record, path, written, deleted)
+    except (OSError, SettingsEditRefused) as exc:
+        return (), first_line(exc)
+    notes = row.plan(platform_os, original, path).notes if changed else ()
+    return ((row.summary, *notes, *conflicts) if changed else tuple(conflicts)), None
+
+
+def _pending_owned_keys(
+    row: KeysRow,
+    owned: OwnedKeys,
+    tool_id: str,
+    platform_os: str,
+    home: Path,
+    environ: Mapping[str, str],
+) -> str | None:
+    path = row.config_path(platform_os, home, environ)
+    record = _record(tool_id, home, environ)
+    old = _owned_record(record)
+    recorded = record.exists() and (old.path is None or old.path == str(path))
+    if path.is_symlink():
+        return None if recorded else f"{path.name} is a symlink; left as it is"
+    try:
+        before = read_settings(path)
+        text = snapshot_text(before)
+        if not text.strip():
+            return None if recorded else KEYS_PENDING
+        document = _parse_owned(text)
+        row.validate(text)
+        if not recorded:
+            return KEYS_PENDING
+        wanted = dict(owned.keys(platform_os, home, environ))
+        for section, chord, value in old.keys:
+            key = (section, chord)
+            if (
+                key in wanted
+                and same_value(lookup(document, key), value)
+                and not same_value(value, wanted[key])
+            ):
+                return KEYS_PENDING
+    except OSError as exc:
+        return None if recorded else first_line(exc)
+    return None
+
+
+def _strip_owned_keys(
+    row: KeysRow,
+    owned: OwnedKeys,
+    tool_id: str,
+    platform_os: str,
+    home: Path,
+    environ: Mapping[str, str],
+) -> tuple[str, ...]:
+    path = row.config_path(platform_os, home, environ)
+    record = _record(tool_id, home, environ)
+    old = _owned_record(record)
+    marker = _created_marker(row, home, environ)
+    sidecar = created_path_record(marker)
+    if old.path is not None and old.path != str(path):
+        return (
+            f"{tool_id}: edited keys were recorded for {old.path}, "
+            "not the file now resolved; left alone",
+        )
+    if path.is_symlink():
+        return (f"{tool_id}: {path.name} is a symlink; left as it is",)
+    try:
+        if row.bind_created_path and marker.exists():
+            bound = sidecar.read_text(errors="replace") if sidecar.exists() else None
+            if bound != f"{path}\n":
+                shown = bound.removesuffix("\n") if bound is not None else "an unrecorded path"
+                return (
+                    f"{tool_id}: created config at {shown} is not the file now resolved; "
+                    "left alone",
+                )
+        before = read_settings(path)
+        if before is not None:
+            original = snapshot_text(before)
+            text = original
+            document = _parse_owned(text)
+            for section, chord, value in old.keys:
+                key = (section, chord)
+                if key_held(lookup(document, key), value):
+                    text = remove_key(text, "json", key)
+                    document = _parse_owned(text)
+            if marker.exists() and text == owned.pinned(platform_os):
+                directories = tuple(marker.read_text(errors="replace").splitlines()[1:])
+                delete_if_unchanged(path, before)
+                remove_created_dirs(directories, home)
+            elif text != original:
+                write_if_unchanged(path, before, text)
+        record.unlink(missing_ok=True)
+        marker.unlink(missing_ok=True)
+        sidecar.unlink(missing_ok=True)
+    except (OSError, SettingsEditRefused) as exc:
+        return (f"{tool_id}: {first_line(exc)}",)
+    return ()
+
+
+def before_removal_terminal_keys(
+    row: KeysRow,
+    tool_id: str,
+    platform_os: str,
+    home: Path,
+    environ: Mapping[str, str],
+) -> Restored:
+    """Restore a default profile before removal; callers must refuse if unconfirmed."""
+    del tool_id
+    ownership = row.ownership
+    if isinstance(ownership, WholeFile) and ownership.hook:
+        return ownership.hook.restore(platform_os, home, environ, False)
+    return Restored((), True)
+
+
 def apply_terminal_keys(
     row: KeysRow,
     tool_id: str,
@@ -388,6 +827,15 @@ def apply_terminal_keys(
 
     `skip_recorded` (RECONFIGURE) rewrites a present, stale recorded region (28 D-06); a region
     the user deleted stays deleted. Nothing is written when the file cannot take the region."""
+    ownership = row.ownership
+    if isinstance(ownership, WholeFile):
+        return _apply_whole_file(
+            row, ownership, tool_id, platform_os, home, environ, skip_recorded=skip_recorded
+        )
+    if isinstance(ownership, OwnedKeys):
+        return _apply_owned_keys(
+            row, ownership, tool_id, platform_os, home, environ, skip_recorded=skip_recorded
+        )
     record = _record(tool_id, home, environ)
     recorded = skip_recorded and record.exists()
     path = row.config_path(platform_os, home, environ)
@@ -398,14 +846,13 @@ def apply_terminal_keys(
         body = "" if recorded and plan.body is None and plan.conflicts else plan.body
         updated = replace_owned_region(
             text,
-            row.ownership.region,
+            ownership.region,
             body,
-            comment=row.ownership.comment,
-            placement=row.ownership.placement,
+            comment=ownership.comment,
+            placement=ownership.placement,
         )
         region_present = (
-            replace_owned_region(text, row.ownership.region, None, comment=row.ownership.comment)
-            != text
+            replace_owned_region(text, ownership.region, None, comment=ownership.comment) != text
         )
     except OSError as exc:
         return ((), None) if recorded else ((), first_line(exc))
@@ -440,40 +887,40 @@ def terminal_keys_pending(
     row: KeysRow, tool_id: str, platform_os: str, home: Path, environ: Mapping[str, str]
 ) -> str | None:
     """Pending means never applied; a present region differing from its current render is drift."""
+    ownership = row.ownership
+    if isinstance(ownership, WholeFile):
+        return _pending_whole_file(row, ownership, tool_id, platform_os, home, environ)
+    if isinstance(ownership, OwnedKeys):
+        return _pending_owned_keys(row, ownership, tool_id, platform_os, home, environ)
     recorded = _record(tool_id, home, environ).exists()
     present = False
     try:
         path = row.config_path(platform_os, home, environ)
         text = snapshot_text(read_settings(path))
         present = (
-            replace_owned_region(text, row.ownership.region, None, comment=row.ownership.comment)
-            != text
+            replace_owned_region(text, ownership.region, None, comment=ownership.comment) != text
         )
         if recorded and not present:
             return None
         plan = _render(row, platform_os, text, path)
         if plan.refusal is not None and not recorded:
             return plan.refusal
-        if (
-            not present
-            and row.ownership.placement is Placement.BEFORE_RETURN
-            and plan.body is not None
-        ):
+        if not present and ownership.placement is Placement.BEFORE_RETURN and plan.body is not None:
             replace_owned_region(
                 text,
-                row.ownership.region,
+                ownership.region,
                 plan.body,
-                comment=row.ownership.comment,
-                placement=row.ownership.placement,
+                comment=ownership.comment,
+                placement=ownership.placement,
             )
         if present:
             body = "" if plan.body is None and plan.conflicts else plan.body
             updated = replace_owned_region(
                 text,
-                row.ownership.region,
+                ownership.region,
                 body,
-                comment=row.ownership.comment,
-                placement=row.ownership.placement,
+                comment=ownership.comment,
+                placement=ownership.placement,
             )
             if plan.refusal is None and updated != text:
                 return KEYS_PENDING
@@ -492,6 +939,11 @@ def strip_terminal_keys(
     row: KeysRow, tool_id: str, platform_os: str, home: Path, environ: Mapping[str, str]
 ) -> tuple[str, ...]:
     """Remove the tool's owned regions and record; the config remains unless created by us."""
+    ownership = row.ownership
+    if isinstance(ownership, WholeFile):
+        return _strip_whole_file(row, ownership, tool_id, platform_os, home, environ)
+    if isinstance(ownership, OwnedKeys):
+        return _strip_owned_keys(row, ownership, tool_id, platform_os, home, environ)
     path = row.config_path(platform_os, home, environ)
     warnings: list[str] = []
     marker = _created_marker(row, home, environ)
@@ -505,9 +957,9 @@ def strip_terminal_keys(
             )
     paths = row.strip_files(platform_os, home, environ) if row.strip_files is not None else (path,)
     for candidate in paths:
-        for region in (*row.sibling_regions, row.ownership.region):
+        for region in (*row.sibling_regions, ownership.region):
             try:
-                strip_region(candidate, region, comment=row.ownership.comment)
+                strip_region(candidate, region, comment=ownership.comment)
             except OSError as exc:
                 warnings.append(f"{tool_id}: {candidate.name}: {first_line(exc)}")
     if not warnings:
@@ -519,7 +971,7 @@ def strip_terminal_keys(
                 home,
                 tool_id,
                 bound=row.bind_created_path,
-                seed=WEZTERM_SKELETON if row.ownership.placement is Placement.BEFORE_RETURN else "",
+                seed=WEZTERM_SKELETON if ownership.placement is Placement.BEFORE_RETURN else "",
             )
         )
     return tuple(warnings)

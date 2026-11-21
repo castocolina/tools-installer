@@ -649,6 +649,12 @@ class KeysPlan:
     notes: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class Restored:
+    lines: tuple[str, ...]
+    confirmed: bool
+
+
 _KEY_BINDINGS = (
     ("Left", "Alt", 'chars = "\\u001bb"'),
     ("Right", "Alt", 'chars = "\\u001bf"'),
