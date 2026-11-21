@@ -341,3 +341,177 @@ Plan references below use **`P`** for `.planning/phases/32-onboard-xcode-clt-aws
 ### Status: Issues Found — fix and re-invoke
 
 No repository files were changed. No tests, container runs, real host installations, or macOS checks were performed. Graph coverage was best-effort; the new drivers and implementation do not yet exist to verify. No scratch directory was created.
+
+
+## Lane Log (convergence cycle 3, plans at 9de3097c)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 07:56 | opencode-referee-one | one-shot probe | OK |
+| 07:56 to 08:00 | opencode-referee-one | real review through `gsd-tools query review-lane invoke`, background, 2700 s timeout, stdin `/dev/null`, prior findings supplied | exit 0, stderr empty |
+
+Failures this cycle: none. No other lane or model was used.
+
+## Orchestrator verification of the cycle 3 concerns
+
+Cycle 3 of 3: the cap. Real HIGH by cycle: 10, 9, now 9 distinct (two reported ones are duplicates across plans; one is an inherited harness behavior and is rejected): the count is no longer falling and every item is a second-order gap in the previous round's fixes, which the post-execution code review, security audit and verifier gates exist to catch against real code. DECISION (owner's cap rule, and the cost/benefit of a fourth cycle): this is the LAST revision; the run executes right after it with no cycle 4; whatever the review gates find afterwards goes to the fix round. Plan-internal findings were checked against the cited lines; code facts are for the planner to verify. DECISIONS apply exactly; all provisional.
+
+| Id | Claim | Judgment and DECISION |
+|---|---|---|
+| H1 (32-01, 32-02) | `softwareupdate` remains executable through registry argv: the refused-word sets omit it though the SPEC prohibits running it | Real (32-SPEC prohibition; `installer/model.py:482-490`). Add `softwareupdate` to the refused tokens for `install`, `update` and `remove` and to the AST guard's words; test it at registry load. |
+| H2 (32-01) | A fixed-argv `install` with `writable_prefix` makes `needs_manual` demand a URL (`installer/executors.py:753-767`) which fixed-argv methods must not have, so a loader-accepted method crashes before the runner (`installer/engine.py:256`) | Real by the referee's reading; planner verifies. Reject at registry load a fixed-argv `install` combined with `writable_prefix` (and test the refusal). |
+| M1 (32-01) | The PTY test reads to EOF, but Linux reports slave closure as `EIO`, and a timed-out forked child can outlive the helper | Specify `EIO` handling and kill the whole process group on timeout in the test helper. |
+| M2 (32-02) | Completion text still says "manifest only" although a probe-named executable reads present | Make every remaining claim say "manifest plus a probe name nothing creates". |
+| H3 (32-04) | Removing a created JSONC ancestor compares parsed values (comments stripped), so a user comment added inside a created `mcp` or `servers` object can be deleted with it | Real by the referee's reading (`installer/agent_settings.py:146-153,486-509`; planner verifies). Remove a created ancestor only when its source text holds no comment or other user text; otherwise keep the ancestor with what remains; add a JSONC test that inserts a comment after registration and verifies it survives revert. |
+| H4 (32-05, 32-08) | The late-host test requires a Codex-only step to carry `hosts == ("codex",)` but `_hook_fact` assigns `hosts` only when a consent host is pending, so the step passes `confirmed_hosts=None` | Real plan-internal contradiction (32-05:196 vs :205). Every step of a consent-bearing hook carries the disclosed host ids, including a step with no consent host pending; the session always passes them; make the test and the construction agree. |
+| H5 (32-05) | `os == "fedora" and immutable` also covers Silverblue (`installer/platform.py:19-23`), so the Flatpak export is not Bazzite-only | Real. Use a Bazzite discriminator (`ID=bazzite` or `VARIANT_ID` in os-release, through an existing detection if `installer/platform.py` has one, else one injected seam) AND the wrapper file; test a non-Bazzite immutable Fedora host with the wrapper present. |
+| H6 (32-05) | Recorded hosts suppress recovery: the drift calculation and the registration subtract receipt-recorded hosts before the settled check, so a deleted registration never becomes pending | Real by the referee's reading (`installer/version_status.py:908-921`, `installer/postinstall.py:663-666`; planner verifies). The per-host settled read (the server entry exists) decides, not the receipt record; a recorded host whose server entry is missing is pending again; Claude still needs consent and every write stays absent-only; test a deleted registration for each host. |
+| H7 (32-06, 32-07, 32-08) | The shared landing helper sets `LANDING_PULLED=1` when the image inspection fails and removes the shared image tag, so another process pulling the tag in between loses its image | REJECTED, inherited pre-existing harness behavior of every landing target since phase 24 (audit-landing, herdr-keys, ghostty, herdr-app); the window needs a concurrent pull of the same tag by another session between two adjacent commands; no plan change; record it in the 32-06 ledger and backlog 999.32. |
+| H8 (32-07) | The driver calls `install_one` before the four diagnostic modes, but the engine's raw-download smoke (`installer/download.py:425-429,510-526`) fails on a FUSE or library error and stops the lifecycle before the modes and the removal verdicts | Real by the referee's reading; planner verifies. Specify the pre-install-smoke failure path: the driver reports `UNPROVEN engine-smoke-failed` with the evidence, still runs the diagnostic modes against the staged binary where one exists, and still runs the removal verdict; never a pass. Test it. |
+| M3 (32-07) | The expected-mode list omits `no-sandbox` | Add it. |
+| H9 (32-09) | One architecture's Bruno smoke result is applied to both tarball methods though 32-07 ran only the container's own architecture | Real. Apply a recorded smoke argument list only to the tarball method of the architecture the container ran; the other keeps the default and the limit is stated in `# Verified`; test it. |
+| M4 (32-09) | The unverified-Bruno paragraph says "no digest-verified PASS" while the test forbids `PASS` in it | Reword the paragraph without the word, or narrow the test to the proof claim; one rule. |
+| M5 (32-09) | The Xcode mutation (adding a URL) is not guaranteed to fail the guard | The guard explicitly rejects a `url` on the Xcode method; keep the mutation. |
+| M6 (32-10) | Preview eligibility checks the file but not the key-path half of the allow-list | The preview shares the revert's full (file, key path) eligibility, including forged shared-file entries; test. |
+| M7 (32-10) | An existing malformed file is previewed as removable though revert refuses it | Surface an unevaluable or refused file in the preview instead of promising removal; test the public preview. |
+| X1 (cross) | 32-10 declares only 32-05 as a dependency despite wave 10 | Add 32-09 to `depends_on` (strict ordering encoded). |
+| X2 (cross) | Final gates with the default TMPDIR | REJECTED once more (the doctor test wraps by path length; every scratch directory the plans create is owned and trapped); ruling stays in the 32-01 ledger. |
+
+## OpenCode Review (opencode-referee-one), cycle 3
+
+Using the plan-review checklist to check all ten current plans against the repository and the prior-cycle findings. I’ll keep the review read-only.
+**High — the late-host consent regression is still internally inconsistent.** `32-05-PLAN.md:196` requires `step.hosts == ("codex",)` when Claude is not pending, but `32-05-PLAN.md:205` assigns hosts only when a consent host is pending. The prescribed step therefore has empty hosts and cannot produce the specified confirmed-host warning.
+**Medium — the unverified-Bruno branch cannot satisfy its own test.** `32-09-PLAN.md:116` forbids `PASS` in the paragraph, but Task 1’s prescribed paragraph at `32-09-PLAN.md:127` says “no digest-verified PASS.”
+**High — the revised Bazzite gate still includes non-Bazzite hosts.** `32-05-PLAN.md:163` equates Bazzite with immutable Fedora, but `installer/platform.py:19-23` explicitly says those facts also describe Silverblue. A Silverblue host with the wrapper would still receive the export.
+## Review: Phase 32 implementation plans
+
+### Document Type
+
+GSD · implementation plans
+
+**Overall verdict: Issues found — revise and re-review before execution.** The current plans address several previous findings, but still contain execution-blocking contradictions and gaps in the consent, ledger, container-evidence, and scratch-cleanup contracts.
+
+Plan paths below are relative to:
+
+`.planning/phases/32-onboard-xcode-clt-aws-cli-bruno-gh-stack-and-playwright-mcp/`
+
+## 32-01
+
+1. **Summary:** Adds fixed-argv script installs, named hand-offs, and a script-before-brew preference.
+2. **Findings status:** The prior stdin, controlling-terminal, and indirect-launcher concerns now have explicit regression cases (`32-01-PLAN.md:131-139`).
+3. **Strengths:** The tracer follows a manifest through loading and the engine; the proposed runner test exercises a real controlling terminal (`32-01-PLAN.md:131,137`).
+4. **Concerns:**
+   - **HIGH — `softwareupdate` remains executable through registry argv.** The proposed refused-word sets omit it (`32-01-PLAN.md:133,145`), even though the phase spec prohibits running it (`32-SPEC.md:54-55`). Literal argv validation accepts ordinary command tokens (`installer/model.py:482-490`), and the new branch passes validated argv to the runner (`32-01-PLAN.md:146`). The Python AST guard does not inspect registry data.
+   - **HIGH — A valid fixed-argv method can fail before execution.** The new validator does not exclude `install` with `writable_prefix` (`32-01-PLAN.md:132,145`). When the prefix is unwritable, `needs_manual` requires a URL (`installer/executors.py:753-767`), but fixed-argv methods must not have one. The engine calls that hand-off check before its guarded method execution (`installer/engine.py:256`).
+   - **MEDIUM — The PTY test leaves Linux end-of-stream and child cleanup underspecified.** The helper reads the PTY master “to EOF” and kills only the helper on timeout (`32-01-PLAN.md:137`). Linux commonly reports slave closure as `EIO`; a timed-out forked child can also survive the helper.
+5. **Suggestions:** Refuse `softwareupdate` for all registry argv keys; reject or safely handle fixed argv with `writable_prefix`; specify PTY `EIO` handling and process-group cleanup in the regression test.
+6. **Risk Assessment:** **High:** a prohibited command remains reachable, and a loader-accepted method can crash before the runner is reached.
+
+## 32-02
+
+1. **Summary:** Adds the detect-only Xcode CLT and gh-stack entries.
+2. **Findings status:** The prior runner issue is addressed by the planned 32-01 runner change. The probe-name limitation is now tested and described in several places (`32-02-PLAN.md:28,163-164`).
+3. **Strengths:** The Xcode entry tests the hand-off, update refusal, and removal listing; gh-stack tests its exact install/update argv and receipt-proven folder (`32-02-PLAN.md:123-130,161-168`).
+4. **Concerns:**
+   - **MEDIUM — Some completion text still claims manifest-only detection.** The action and done text say “manifest only” (`32-02-PLAN.md:176,198`), although the plan itself tests that an executable named `gh-stack-extension` on PATH reads present (`32-02-PLAN.md:164`). The existing detector checks `tool.cmd` before `detect_path` (`installer/status.py:168-184`).
+   - **HIGH — The no-`softwareupdate` guard depends on 32-01 closing the registry route.** The AST test covers Python literals (`32-02-PLAN.md:125`), not dynamically loaded argv; see 32-01.
+5. **Suggestions:** Make the remaining completion claims match the manifest-plus-probe behavior; inherit the registry-level command prohibition from 32-01.
+6. **Risk Assessment:** **High** until the prohibited registry execution route is closed; the detection wording issue is narrower.
+
+## 32-03
+
+1. **Summary:** Adds script-first AWS CLI with brew fallback and architecture-pinned Bruno AppImages plus a macOS cask.
+2. **Findings status:** The previous unreachable-fallback and public failure-detail concerns have explicit revised tests (`32-03-PLAN.md:123-128`).
+3. **Strengths:** The AWS fallback is tested through plan construction and execution, including a control that reinstates the blocking dependency (`32-03-PLAN.md:126-128`). Bruno selects separately pinned assets by OS and architecture (`32-03-PLAN.md:167-170`).
+4. **Concerns:** No additional blocking finding in this bounded review. Bruno’s runtime-smoke evidence is addressed under 32-07 and 32-09.
+5. **Suggestions:** Keep the documented console-versus-TUI diagnostic distinction and execute the planned read-only registry verification.
+6. **Risk Assessment:** **Medium:** vendor and macOS behavior remain dependent on the planned container run and owner UAT.
+
+## 32-04
+
+1. **Summary:** Extends the settings ledger for absent-only MCP registration and scoped reversal.
+2. **Findings status:** The previous in-snapshot presence check, file/key allow-list, created-level provenance, and grouped Codex concerns have explicit proposed tests (`32-04-PLAN.md:164-168,178-181`).
+3. **Strengths:** The presence gate is placed inside the write snapshot and retried after a detected race; the Codex grouping is intended to be shared with the preview (`32-04-PLAN.md:175-181`).
+4. **Concerns:**
+   - **HIGH — Removing a created JSONC ancestor can delete comments added later.** The proposed revert compares the ancestor’s parsed value and removes the ancestor if it contains only the recorded chain (`32-04-PLAN.md:131`). JSONC parsing strips comments (`installer/agent_settings.py:146-153`), while `remove_key` can cut the located member (`installer/agent_settings.py:486-509`). A user comment added inside a created `mcp` or `servers` object can therefore disappear even though the parsed value is unchanged.
+5. **Suggestions:** Preserve later comments and other user text when deciding whether to remove a created ancestor; add a JSONC test that inserts a comment after registration and verifies it survives reversal.
+6. **Risk Assessment:** **High:** a reversal can remove user-authored configuration text.
+
+## 32-05
+
+1. **Summary:** Wires Playwright registration, Claude consent, drift reporting, and the removal sweep.
+2. **Findings status:** Shell quoting and an explicit Bazzite gate were added. The late-host consent revision is incomplete, and the platform gate remains broader than Bazzite.
+3. **Strengths:** The plan discloses both Claude files before a consent-bearing step and quotes the manual hand-off’s dynamic arguments (`32-05-PLAN.md:153,197,204-205`).
+4. **Concerns:**
+   - **HIGH — The late-host regression contradicts the prescribed step construction.** The test requires a Codex-only step to carry `hosts == ("codex",)` when Claude is absent (`32-05-PLAN.md:196`). But `_hook_fact` is instructed to populate `hosts` only when a consent host is already pending (`32-05-PLAN.md:205`). With empty hosts, the session passes `confirmed_hosts=None` (`32-05-PLAN.md:204`), so the specified “appeared after you confirmed” warning and confirmed-host binding cannot occur. The existing flow builds the step from the pending hosts and later re-reads presence (`installer/version_status.py:908-934`; `installer/session.py:331-348`; `installer/postinstall.py:663-666`).
+   - **HIGH — Immutable Fedora is not a Bazzite-only test.** The planned gate requires `os == "fedora"` and `immutable` (`32-05-PLAN.md:163`), but the platform model explicitly says those facts cover both Bazzite and Silverblue (`installer/platform.py:19-23`). A non-Bazzite immutable Fedora host with the wrapper would receive the export.
+   - **HIGH — Recorded hosts can suppress recovery after a registration disappears.** The plan says a later rewrite of Claude’s live file will be re-offered (`32-04-PLAN.md:67`) and relies on the hook’s settled read (`32-05-PLAN.md:164`). However, the current drift calculation and registration both subtract receipt-recorded hosts before the settled check or registration (`installer/version_status.py:908-921`; `installer/postinstall.py:663-666`). Once recorded, a deleted registration does not become pending under the specified changes.
+5. **Suggestions:** Bind disclosed hosts for every step belonging to a consent-bearing hook, including a step with no consent host initially pending. Use an actual Bazzite discriminator and test a non-Bazzite immutable Fedora host. Define and test safe recovery of a recorded-but-missing server, retaining Claude consent and absent-only writes.
+6. **Risk Assessment:** **High:** the planned late-host test cannot pass as specified, the export can affect an out-of-scope host, and lost registrations may not be offered for repair.
+
+## 32-06
+
+1. **Summary:** Adds AWS lifecycle and no-gpg container checks plus the shared transcript gate.
+2. **Findings status:** The previous no-gpg listing, exact teardown marker, manual shellcheck, and cleanup findings have concrete revisions (`32-06-PLAN.md:124-129,166-170,179-182`).
+3. **Strengths:** The planned trap test uses a real Bash process and negative control; the shared gate requires ordered, unique verdicts and a digest-bound record (`32-06-PLAN.md:126-129,168-169`).
+4. **Concerns:**
+   - **HIGH — The shared image-removal rule does not prove ownership.** The plan claims only an image pulled by this run is removed (`32-06-PLAN.md:28,182`), but the reused helper sets `LANDING_PULLED=1` when an image inspection fails (`scripts/container-e2e-verify.sh:2828-2832`) and later removes the shared image tag (`scripts/container-e2e-verify.sh:2837-2842`). Another process can pull that tag between inspection and bootstrap; absence at inspection is not proof this run created it.
+5. **Suggestions:** Make shared-image cleanup safe under that interleaving and add a stubbed-runtime test. Apply the same rule to the second Debian image.
+6. **Risk Assessment:** **High:** cleanup may remove an image introduced by another process, contrary to the stated host-safety contract.
+
+## 32-07
+
+1. **Summary:** Adds the Bruno AppImage container check and reports a proven mode or UNPROVEN.
+2. **Findings status:** Extract-dependent modes are no longer directly converted to `smoke_argv`; the previous environment-propagation issue is addressed at the plan level (`32-07-PLAN.md:115-116`).
+3. **Strengths:** The plan distinguishes an unproven run from a pass and binds a reported mode to transcript evidence (`32-07-PLAN.md:111,115`).
+4. **Concerns:**
+   - **HIGH — The engine’s existing smoke can prevent the four diagnostic modes from running.** The driver calls `install_one` before trying the modes (`32-07-PLAN.md:122`). Raw downloads smoke the staged binary before replacing the link (`installer/download.py:425-429,510-526`), and loader errors cause that smoke to fail (`installer/executors.py:93-118`). A FUSE or library failure can therefore stop the lifecycle before the promised mode and removal verdicts.
+   - **HIGH — Image cleanup inherits 32-06’s ownership race.** This target uses the same landing-image helper (`32-07-PLAN.md:151,160`; `scripts/container-e2e-verify.sh:2828-2842`).
+   - **MEDIUM — The orchestrator’s expected-mode list omits `no-sandbox`.** It is one of the four tested modes (`32-07-PLAN.md:112,116`) but is absent from the expected output alternatives (`32-07-PLAN.md:204`).
+5. **Suggestions:** Specify and test the pre-install-smoke failure path without claiming the modes ran; correct the expected-mode list and inherit the safe image cleanup.
+6. **Risk Assessment:** **High:** an intended diagnostic run can terminate before collecting its stated evidence.
+
+## 32-08
+
+1. **Summary:** Adds the Playwright registration, consent, JSON-RPC launch, and removal container proof.
+2. **Findings status:** The prior late-host container case and shared teardown-marker mismatch are explicitly incorporated (`32-08-PLAN.md:118,130`).
+3. **Strengths:** The driver is specified to launch from the registered command and use bounded process-group cleanup (`32-08-PLAN.md:119-123`).
+4. **Concerns:**
+   - **HIGH — The container proof depends on the unresolved consent-step construction in 32-05.** The direct `confirmed_hosts` container call tests the lower-level boundary (`32-08-PLAN.md:130`), but it cannot substitute for a working public Codex-only plan step; that step’s prescribed `hosts` assignment contradicts its test (`32-05-PLAN.md:196,204-205`).
+   - **HIGH — Image cleanup inherits 32-06’s ownership race** through the shared landing helper (`32-08-PLAN.md:160,169`; `scripts/container-e2e-verify.sh:2828-2842`).
+5. **Suggestions:** Keep the direct container check, but fix and exercise the public consent flow in 32-05; inherit the image-cleanup correction.
+6. **Risk Assessment:** **High** until the public consent path and shared cleanup are resolved.
+
+## 32-09
+
+1. **Summary:** Gates AWS and Playwright evidence, reports Bruno’s result, and adds catalog and documentation guards.
+2. **Findings status:** The previous unverified-Bruno-PASS and extract-environment concerns are addressed in the branching rule (`32-09-PLAN.md:25-26`), subject to the concerns below.
+3. **Strengths:** Both required evidence gates run before edits (`32-09-PLAN.md:123`), and the raw Bruno summary line no longer decides proof wording (`32-09-PLAN.md:125`).
+4. **Concerns:**
+   - **HIGH — One architecture’s Bruno smoke result is applied to both assets.** Plan 32-07 runs the asset for the container’s own architecture (`32-07-PLAN.md:30`), but 32-09 applies a returned argument list to **both** tarball methods (`32-09-PLAN.md:26,117`). The other architecture’s invocation has not been exercised.
+   - **MEDIUM — The unverified-Bruno branch cannot satisfy its own test.** The test forbids `PASS` in that paragraph (`32-09-PLAN.md:116`), while the prescribed paragraph says “no digest-verified PASS” (`32-09-PLAN.md:127`).
+   - **MEDIUM — The Xcode mutation is not guaranteed to fail the specified guard.** The guard checks for a macOS script method naming `handoff` (`32-09-PLAN.md:161`), while the mutation adds a URL and expects that guard to fail (`32-09-PLAN.md:168`). The listed guard assertions do not themselves exclude a URL.
+5. **Suggestions:** Bind the Bruno result to the tested architecture, or verify both before applying it to both. Align the unverified paragraph with its test and make the Xcode guard explicitly reject the URL if the mutation is retained.
+6. **Risk Assessment:** **High:** smoke data can be propagated beyond the evidence; two specified test paths are internally inconsistent.
+
+## 32-10
+
+1. **Summary:** Adds a Playwright removal preview based on ledger entries and grouped Codex state.
+2. **Findings status:** The prior grouped-Codex and outside-home concerns now have proposed mechanisms and tests (`32-10-PLAN.md:108-111`).
+3. **Strengths:** The grouped cases compare the preview against an actual subsequent revert (`32-10-PLAN.md:109`).
+4. **Concerns:**
+   - **MEDIUM — Preview eligibility checks the file but not the key-path half of the allow-list.** `_previewable` is specified to filter by setting and allowed file (`32-10-PLAN.md:117`); the revert also filters dynamic entries by allowed key path (`installer/agent_settings.py:1169-1185`). A forged MCP entry using an ordinary key in a shared Codex or OpenCode file can be previewed as removed or kept even though the revert ignores it.
+   - **MEDIUM — An existing malformed file is previewed as removable although revert refuses it.** The plan retains “every key as removed” for unreadable files (`32-10-PLAN.md:117`). The current preview maps parse failures to that state (`installer/agent_settings.py:1416-1425`), and the UI says an existing file’s keys will be removed (`installer/app.py:551-558`); revert instead refuses parse errors (`installer/agent_settings.py:1189-1210`).
+5. **Suggestions:** Share the revert’s full file-and-key eligibility rules with preview, including forged shared-file cases. Surface an unevaluable or refused file rather than promising removal, and test the public preview.
+6. **Risk Assessment:** **Medium:** the removal confirmation can describe changes that will not occur.
+
+## Cross-plan assessment
+
+- **Mandatory scratch cleanup remains unresolved.** Each plan directs `make validate` and `make test` to use the default `TMPDIR`, for example `32-01-PLAN.md:85`. The applicable host instruction requires an owned run directory, exported `TMPDIR`, and cleanup on every exit (`/var/home/bazzite/.config/opencode/AGENTS.md:41-48`). The recorded long-path failure does not exempt those runs. Use a sufficiently short owned path or fix the path-sensitive test; verify cleanup.
+- **Ordering:** The plan wave numbers are sequential, and the principal overlapping file edits are assigned to successive waves. `32-10` declares only `32-05` as a dependency despite being wave 10 (`32-10-PLAN.md:6-8`); an executor honoring the explicit wave still runs it last, but the dependency metadata alone does not impose that order.
+- **Size:** The executor-visible sections measured approximately 21–48 KB per plan. `32-05` has three tasks rather than two (`32-05-PLAN.md:29-32`), though its measured section remains under the stated approximate 55 KB limit.
+- **Coverage and limits:** The repository and the cited source paths were readable. Graph coverage was best-effort; the proposed implementation and drivers do not yet exist, so this review cannot verify their eventual behavior. The provisional decisions were judged as implementation inputs, not reopened.
+
+### Status: Issues Found — fix and re-invoke
+
+No repository files were changed. No tests, containers, installations, network checks, or real-host UAT were run; no scratch directory was created. The review is plan- and source-based, not proof that the proposed implementations will pass at runtime.
