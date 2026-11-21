@@ -11,6 +11,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 BOT_WORKFLOW = ROOT / ".github" / "workflows" / "registry-bot.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+DEPENDABOT = ROOT / ".github" / "dependabot.yml"
 RUNBOOK = ROOT / "docs" / "registry-bot-proof.txt"
 REQUIRED_CHECKS: tuple[str, str] = (
     "validate & test on ubuntu-latest",
@@ -68,6 +69,19 @@ def _runs() -> list[str]:
 def _index(text: str, *parts: str) -> None:
     positions = [text.index(part) for part in parts]
     assert all(a < b for a, b in zip(positions, positions[1:], strict=False))
+
+
+def test_dependabot_declares_one_github_actions_entry() -> None:
+    data = _load(DEPENDABOT)
+    assert data["version"] == 2
+    assert isinstance(data["updates"], list)
+    updates = cast(list[dict[str, Any]], data["updates"])
+    assert len(updates) == 1
+    assert {entry["package-ecosystem"] for entry in updates} == {"github-actions"}
+    entry = updates[0]
+    assert entry["directory"] == "/"
+    assert entry["schedule"] == {"interval": "weekly"}
+    assert entry["groups"] == {"actions": {"patterns": ["*"]}}
 
 
 def test_the_required_check_names_follow_from_the_ci_job() -> None:
@@ -713,15 +727,54 @@ def test_the_runbook_states_what_it_does_not_prove_and_when_bot_02_passes() -> N
     assert "recorded owner decision" not in text
 
 
+def _workflow_crons(text: str) -> list[str]:
+    triggers = _triggers(cast(dict[Any, Any], yaml.safe_load(text)))
+    return [entry["cron"] for entry in triggers.get("schedule", [])] + re.findall(
+        r'^\s*#\s+- cron: "([^"]+)"', text, re.MULTILINE
+    )
+
+
+def _workflow_run_targets(text: str) -> list[str]:
+    return re.findall(
+        r"^\s*(?:WRITE\s+(?:\(OWNER APPROVAL REQUIRED\)\s+)?)?gh workflow run (\S+)",
+        text,
+        re.MULTILINE,
+    )
+
+
+def test_the_cron_helper_reads_both_forms() -> None:
+    base = "name: example\non:\n  workflow_dispatch:\n"
+    assert _workflow_crons(base + '  # schedule:\n  #   - cron: "37 6 * * 1"\n') == ["37 6 * * 1"]
+    assert _workflow_crons(base + '  schedule:\n    - cron: "37 6 * * 1"\n') == ["37 6 * * 1"]
+    assert _workflow_crons(base) == []
+
+
+def test_the_command_extraction_reads_command_lines_only() -> None:
+    text = """The bot may run gh workflow run missing.yml in a sentence
+WRITE   gh workflow run registry-bot.yml --ref main
+  gh workflow run ci.yml --ref "$BRANCH"
+command="gh workflow run other.yml --ref $BRANCH"
+gh issue comment 1 --body "gh workflow run again.yml"
+"""
+    assert _workflow_run_targets(text) == ["registry-bot.yml", "ci.yml"]
+
+
 def test_the_workflow_and_the_runbook_agree_on_the_contract() -> None:
     text = _runbook()
-    triggers = _triggers(_bot())
-    assert set(triggers) in ({"workflow_dispatch"}, {"schedule", "workflow_dispatch"})
-    if "schedule" in triggers:
-        assert any(entry["cron"] == "37 6 * * 1" for entry in triggers["schedule"])
-    else:
-        assert 'cron: "37 6 * * 1"' in BOT_WORKFLOW.read_text()
-    assert "37 6 * * 1" in text
+    crons = _workflow_crons(BOT_WORKFLOW.read_text(encoding="utf-8"))
+    assert len(crons) == 1 and not crons[0].startswith("0 ")
+    assert crons[0] in text.rsplit("== ", 1)[1]
+    runs = _runs()
+    runbook_targets = set(_workflow_run_targets(text))
+    bot_targets = set(_workflow_run_targets("\n".join(runs)))
+    assert runbook_targets == {"registry-bot.yml"}
+    assert bot_targets == {"ci.yml"}
+    assert all(
+        (ROOT / ".github" / "workflows" / target).is_file()
+        for target in runbook_targets | bot_targets
+    )
+    assert "registry-bot" in text and any("registry-bot" in run for run in runs)
+    assert "bot/registry-" in text and "bot/registry-" in _step("Name the branch")["run"]
 
 
 def test_the_runbook_ends_with_the_cron_enabling_and_push_restriction_steps() -> None:

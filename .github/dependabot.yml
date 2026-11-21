@@ -1,0 +1,12 @@
+# Keep this repository's action versions current; Dependabot opens pull requests we never merge.
+# The owner fast-forwards the Dependabot branch or closes the pull request; this takes effect on the default branch only.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
