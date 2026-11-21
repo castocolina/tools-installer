@@ -291,19 +291,19 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 33-01-PLAN.md — The date-only noise flag: `verify-registry --write --bumps-only` writes only real bumps (and the `verified` date of the tools bumped), `--bumps-only` without `--write` is exit 64; the byte-identical date-only, real-bump, file-order, no-drift, drifted-neighbour, two-method and failed-candidate tests, and a help sentence saying that `verified` certifies the bumped pins only (BOT-04)
+- [ ] 33-01-PLAN.md — The date-only noise flag: `verify-registry --write --bumps-only` writes only real bumps (and the `verified` date of the tools bumped), `--bumps-only` without `--write` is exit 64; the byte-identical date-only, real-bump, file-order, no-drift, drifted-neighbour, two-method, failed-candidate and no-op-candidate tests, and a help sentence and an `.claude/architecture.md` note saying that `verified` certifies the bumped pins only (BOT-04)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 33-02-PLAN.md — `ci.yml` gains a bare `workflow_dispatch:` with the two listed assertion amendments, and the new bot test module opens with its own loader and the exact required check names (BOT-02)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 33-03-PLAN.md — The bot workflow `registry-bot.yml` (dispatch-only first, exact permissions, guard output, compare step that skips only an identical bot branch on the current base, explicit-lease push of `bot/registry-<date>`, `registry-bot` issue with a validated number and the closing keyword, CI dispatch with one retry, a CI dispatch for an unchanged branch only when none ran for its head, a failure report for a push or dispatch on the issue, expected-SHA old-branch deletion, honest trust-boundary wording) and its workflow tests (BOT-01, BOT-02, BOT-03)
+- [ ] 33-03-PLAN.md — The bot workflow `registry-bot.yml` (dispatch-only first, exact permissions, guard output, compare step that skips only an identical bot branch on the current base, explicit-lease push of `bot/registry-<date>`, `registry-bot` issue with a validated number and the closing keyword, CI dispatch with one retry, a CI dispatch for an unchanged branch unless a queued, running or successful run exists for its head, a failure report for a push or dispatch on the issue, full-prefix expected-SHA old-branch deletion after a successful dispatch or redispatch, an exit-code guard, honest trust-boundary wording) and its workflow tests (BOT-01, BOT-02, BOT-03)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 33-04-PLAN.md — The owner-run proof runbook `docs/registry-bot-proof.txt` (stopping preflight, bot run on the default branch on real drift, identification of the bot commit and its dispatched CI runs, check names, same-day rerun that must skip, UTC-midnight stops, the BOT-02 question with Options A and B, protection removal and cleanup, record with a `passed`-only-when-demonstrated rule, cron-enabling and push-restriction follow-ups) and its host tests (BOT-02)
+- [ ] 33-04-PLAN.md — The owner-run proof runbook `docs/registry-bot-proof.txt` (stopping preflight, every push from a detached scratch worktree through `push_exact`, bot run on the default branch on real drift bound to run ids, identification of the bot commit and its dispatched CI runs, check names, same-day rerun that must skip, UTC-midnight stops, the BOT-02 question with Options A and B, protection removal and whole-namespace cleanup, record with a `passed`-only-when-demonstrated rule, cron-enabling and push-restriction follow-ups) and its host tests (BOT-02)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 33-05-PLAN.md — `.github/dependabot.yml` for GitHub Actions with its parse test, the README and git workflow documentation, and a cross-file consistency test (cron accepted in its commented and enabled form, workflow targets read from command lines only) with the end-of-phase assert-only gates, `make validate` and `make test` (BOT-01, BOT-02, BOT-03, BOT-04)
+- [ ] 33-05-PLAN.md — `.github/dependabot.yml` for GitHub Actions with its parse test, the README and git workflow documentation (landing from a worktree detached at the fetched SHA), and a cross-file consistency test (cron accepted in its commented and enabled form, workflow targets read from command lines only) with the end-of-phase assert-only gates, `make validate` and `make test` (BOT-01, BOT-02, BOT-03, BOT-04)
 
 ### Phase 34: Daily update check with a desktop notification
 
