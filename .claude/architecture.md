@@ -226,7 +226,9 @@ is genuinely feasible to support. If a platform is knowingly left out
 Every `[[tool]]` block carries a required `verified = YYYY-MM-DD` TOML date
 the loader validates (a date, not a string; not in the future beyond one day
 of clock skew). A registry verification run refreshes that key when the entry
-passes; the dated `# Verified {date}: ...` comment above the block remains the
+passes (the one exception: with `--write --bumps-only`, which the update bot passes,
+only a tool whose pins were bumped is re-dated, and its `verified` then certifies the bumped pins only,
+while findings on its other methods still appear in the drift report); the dated `# Verified {date}: ...` comment above the block remains the
 free-text research note — never a checked-in excerpt or snapshot of the
 verified external source. Method keys are a closed set per kind
 (`installer/model.py::METHOD_PARAMS`; an unknown key fails to load). A pinned

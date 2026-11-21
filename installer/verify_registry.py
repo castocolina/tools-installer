@@ -1,7 +1,7 @@
 """Read-only registry drift check over downloadable install methods.
 
 Exit codes: 0 ok; 1 confirmed drift; 2 inconclusive/blocked or issue upsert failed;
-64 ``--candidate`` usage error; 70 internal error; 73 registry write refused.
+64 usage error (``--candidate`` or ``--bumps-only``); 70 internal error; 73 registry write refused.
 """
 
 from __future__ import annotations
@@ -1183,6 +1183,7 @@ class _BumpResult:
     fail_reason: str | None = None
     candidate_findings: tuple[Finding, ...] = ()
     bump_edits: tuple[RegistryEdit, ...] = ()
+    changes_registry: bool = True
 
 
 def _build_bump_edits(
@@ -1322,19 +1323,35 @@ def _plan_bumps(
                 new_version=candidate,
                 candidate_findings=candidate_report.findings,
                 bump_edits=bump_edits,
+                changes_registry=any(
+                    edit.method_index is None
+                    or (
+                        edit.value.strip('"').lower()
+                        if edit.key == "sha256"
+                        else edit.value.strip('"')
+                    )
+                    != (
+                        str(tool.methods[edit.method_index].params.get(edit.key, "")).lower()
+                        if edit.key == "sha256"
+                        else str(tool.methods[edit.method_index].params.get(edit.key, ""))
+                    )
+                    for edit in bump_edits
+                ),
             )
         )
     return results
 
 
 def _registry_edits_for_write(
-    report: Report, bumps: Sequence[_BumpResult], write_day: date
+    report: Report, bumps: Sequence[_BumpResult], write_day: date, *, bumps_only: bool = False
 ) -> list[RegistryEdit]:
     edits: list[RegistryEdit] = []
     for bump in bumps:
-        if bump.applied:
+        if bump.applied and (not bumps_only or bump.changes_registry):
             edits.extend(bump.bump_edits)
-    for tool_id in report.passed_tools():
+    bumped = {bump.tool_id for bump in bumps if bump.applied and bump.changes_registry}
+    dated = sorted(bumped) if bumps_only else report.passed_tools()
+    for tool_id in dated:
         edits.append(RegistryEdit(tool_id, None, "verified", write_day.isoformat()))
     return edits
 
@@ -1508,7 +1525,7 @@ Exit codes:
   0  ok
   1  confirmed drift
   2  inconclusive/blocked or issue upsert failed
-  64 --candidate usage error
+  64 usage error (--candidate, --bumps-only)
   70 internal error
   73 registry write refused
 """
@@ -1556,6 +1573,16 @@ def _run_verify_registry(
         help="Write verified dates for passing tools (maintainer only).",
     )
     parser.add_argument(
+        "--bumps-only",
+        action="store_true",
+        help=(
+            "With --write, write only pin bumps and the verified date of the tools bumped "
+            "(skips date-only changes; requires --write). After a bump, verified certifies "
+            "the bumped pins only; findings on a tool's other methods still show in the "
+            "drift report."
+        ),
+    )
+    parser.add_argument(
         "--candidate",
         action="append",
         default=[],
@@ -1580,6 +1607,9 @@ def _run_verify_registry(
     if explicit and not args.write:
         print("--candidate requires --write", file=sys.stderr)
         return EXIT_USAGE
+    if args.bumps_only and not args.write:
+        print("--bumps-only requires --write", file=sys.stderr)
+        return EXIT_USAGE
     gh_runner = gh if gh is not None else functools.partial(run_output, timeout=60)
     if probe is None:
         token = github_token(gh_runner)
@@ -1600,7 +1630,7 @@ def _run_verify_registry(
             bumps = _plan_bumps(tools, initial_report, active_probe, explicit)
             tools_by_id = {tool.id: tool for tool in tools}
             report = _finalize_report_after_bumps(initial_report, tools_by_id, bumps)
-            edits = _registry_edits_for_write(report, bumps, write_day)
+            edits = _registry_edits_for_write(report, bumps, write_day, bumps_only=args.bumps_only)
             if edits:
                 current_text = args.registry.read_text(encoding="utf-8")
                 if current_text != registry_text:
@@ -1609,8 +1639,9 @@ def _run_verify_registry(
                     )
                 updated = apply_registry_edits(registry_text, edits)
                 atomic_write_text(args.registry, updated)
-                for tool_id in report.passed_tools():
-                    print(f"dated {tool_id}", file=sys.stderr)
+                for edit in edits:
+                    if edit.key == "verified":
+                        print(f"dated {edit.tool_id}", file=sys.stderr)
         except RegistryWriteError as exc:
             print(str(exc), file=sys.stderr)
             return EXIT_WRITE_REFUSED

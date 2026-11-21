@@ -2621,6 +2621,95 @@ def test_write_dates_only_passing_tools(tmp_path: Path, monkeypatch: pytest.Monk
     assert code == 1
 
 
+def _two_tool_write_probe() -> Probe:
+    tar_a = _gz_tar_bytes({"bin/a": b"x"})
+    tar_b = _gz_tar_bytes({"bin/b": b"y"})
+    url_a = "https://example.com/a-1.0.0.tar.gz"
+    url_b = "https://example.com/b-1.0.0.tar.gz"
+
+    def head(url: str) -> str:
+        if url in (url_a, url_b):
+            return 'etag:"1"'
+        raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    def download(url: str, dest: Path) -> None:
+        if url == url_a:
+            dest.write_bytes(tar_a)
+        elif url == url_b:
+            dest.write_bytes(tar_b)
+        else:
+            raise HTTPError(url, 404, "missing", Message(), fp=io.BytesIO())
+
+    return Probe(release=lambda _r: Release(tag="v1.0.0", digests={}), head=head, download=download)
+
+
+def test_bumps_only_leaves_a_date_only_write_byte_identical(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    flagged = _two_tool_write_fixture(tmp_path / "flag")
+    plain = _two_tool_write_fixture(tmp_path / "plain")
+    flagged_before = flagged.read_bytes()
+    plain_before = plain.read_bytes()
+    probe = _two_tool_write_probe()
+    today = date(2026, 10, 15)
+
+    code = main(
+        [
+            "--registry",
+            str(flagged),
+            "--state",
+            str(tmp_path / "flag" / "state.json"),
+            "--write",
+            "--bumps-only",
+        ],
+        probe=probe,
+        today=today,
+    )
+    assert code == 1
+    assert flagged.read_bytes() == flagged_before
+    assert "dated " not in capsys.readouterr().err
+
+    code = main(
+        ["--registry", str(plain), "--state", str(tmp_path / "plain" / "state.json"), "--write"],
+        probe=probe,
+        today=today,
+    )
+    assert code == 1
+    assert plain.read_bytes() != plain_before
+    block = plain.read_text().split('id = "tool_a"')[1].split("[[tool]]")[0]
+    assert "verified = 2026-10-15" in block
+    assert "dated tool_a" in capsys.readouterr().err
+
+
+def test_bumps_only_requires_write_and_costs_no_network(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _two_tool_write_fixture(tmp_path / "usage")
+    before = registry.read_bytes()
+    counts = {"release": 0, "head": 0, "download": 0}
+
+    def release(_repo: str) -> Release:
+        counts["release"] += 1
+        return Release(tag="v1.0.0", digests={})
+
+    def head(_url: str) -> str:
+        counts["head"] += 1
+        return 'etag:"1"'
+
+    def download(_url: str, dest: Path) -> None:
+        counts["download"] += 1
+        dest.write_bytes(b"")
+
+    code = main(
+        ["--registry", str(registry), "--state", str(tmp_path / "state.json"), "--bumps-only"],
+        probe=Probe(release=release, head=head, download=download),
+    )
+    assert code == EXIT_USAGE
+    assert "--bumps-only requires --write" in capsys.readouterr().err
+    assert registry.read_bytes() == before
+    assert counts == {"release": 0, "head": 0, "download": 0}
+
+
 def test_write_refuses_when_the_registry_changed_during_the_run(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -3065,6 +3154,307 @@ def test_newer_github_pin_is_bumped_when_the_candidate_passes(
     assert new_digest in text
     assert "verified = 2026-10-15" in text
     assert code == 0
+
+
+def _bumps_only_fixture() -> tuple[str, Probe, str]:
+    tar_a = _gz_tar_bytes({"bin/a": b"x"})
+    tar_old = _gz_tar_bytes({"bin/x": b"old"})
+    tar_new = _gz_tar_bytes({"bin/x": b"new"})
+    digest = hashlib.sha256(tar_new).hexdigest()
+    content = f"""
+[[tool]]
+id = "tool_a"
+name = "tool_a"
+category = "git"
+cmd = "a"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://example.com/a-{{ver}}.tar.gz"
+version = "1.0.0"
+member = "bin/a"
+strip = 0
+sha256 = "{hashlib.sha256(tar_a).hexdigest()}"
+
+[[tool]]
+id = "helm"
+name = "helm"
+category = "git"
+cmd = "x"
+priority = "P2"
+audience = "both"
+tier = "user"
+verified = 2026-10-01
+[[tool.method]]
+kind = "tarball"
+url = "https://github.com/o/r/releases/download/{{ver}}/a-{{ver}}.tar.gz"
+version = "31.0.2"
+member = "bin/x"
+strip = 0
+sha256 = "{"a" * 64}"
+"""
+    payloads = {
+        "https://example.com/a-1.0.0.tar.gz": tar_a,
+        "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz": tar_old,
+        "https://github.com/o/r/releases/download/32.4.1/a-32.4.1.tar.gz": tar_new,
+    }
+    probe, _ = _map_probe(
+        Release(tag="v32.4.1", digests={"a-32.4.1.tar.gz": digest}), payloads=payloads
+    )
+    return content, probe, digest
+
+
+def test_bumps_only_still_applies_a_real_bump_with_its_three_keys(tmp_path: Path) -> None:
+    registry = _github_pin_registry(tmp_path)
+    before = tomllib.loads(registry.read_text())["tool"][0]
+    _, probe, digest = _bumps_only_fixture()
+    code = main(
+        [
+            "--registry",
+            str(registry),
+            "--state",
+            str(tmp_path / "state.json"),
+            "--write",
+            "--bumps-only",
+        ],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    after = tomllib.loads(registry.read_text())["tool"][0]
+    old_method, new_method = before["method"][0], after["method"][0]
+    assert code == 0
+    changed = {
+        key
+        for key in old_method.keys() | new_method.keys()
+        if old_method.get(key) != new_method.get(key)
+    }
+    assert changed == {"version", "sha256"}
+    assert new_method["version"] == "32.4.1"
+    assert new_method["sha256"] == digest == digest.lower()
+    assert len(digest) == 64
+    assert before["verified"] == date(2026, 10, 1)
+    assert after["verified"] == date(2026, 10, 15)
+    assert {key: value for key, value in before.items() if key not in {"method", "verified"}} == {
+        key: value for key, value in after.items() if key not in {"method", "verified"}
+    }
+
+
+def test_bumps_only_dates_only_the_bumped_tool_whatever_the_file_order(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    content, probe, digest = _bumps_only_fixture()
+    for directory, flags in (("flag", ["--bumps-only"]), ("plain", [])):
+        registry = _write_registry(tmp_path / directory, content)
+        code = main(
+            [
+                "--registry",
+                str(registry),
+                "--state",
+                str(registry.parent / "state.json"),
+                "--write",
+                *flags,
+            ],
+            probe=probe,
+            today=date(2026, 10, 15),
+        )
+        tools = {tool["id"]: tool for tool in tomllib.loads(registry.read_text())["tool"]}
+        err = capsys.readouterr().err
+        assert code == 0
+        assert tools["helm"]["verified"] == date(2026, 10, 15)
+        assert tools["helm"]["method"][0]["version"] == "32.4.1"
+        assert tools["helm"]["method"][0]["sha256"] == digest
+        assert "dated helm" in err
+        if flags:
+            assert tools["tool_a"]["verified"] == date(2026, 10, 1)
+            assert "dated tool_a" not in err
+        else:
+            assert tools["tool_a"]["verified"] == date(2026, 10, 15)
+            assert "dated tool_a" in err
+
+
+def test_bumps_only_leaves_a_registry_with_no_drift_unchanged(tmp_path: Path) -> None:
+    content, probe, _ = _bumps_only_fixture()
+    content = content.split('\n[[tool]]\nid = "helm"')[0].replace("2026-10-01", "2026-10-15")
+    for directory, flags in (("flag", ["--bumps-only"]), ("plain", [])):
+        registry = _write_registry(tmp_path / directory, content)
+        before = registry.read_bytes()
+        code = main(
+            [
+                "--registry",
+                str(registry),
+                "--state",
+                str(registry.parent / "state.json"),
+                "--write",
+                *flags,
+            ],
+            probe=probe,
+            today=date(2026, 10, 15),
+        )
+        assert code == 0
+        assert registry.read_bytes() == before
+
+
+def test_bumps_only_help_states_what_verified_certifies(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+    assert excinfo.value.code == 0
+    assert "certifies the bumped pins only" in " ".join(capsys.readouterr().out.split())
+
+
+def _combo_bumps_only_fixture(tmp_path: Path) -> tuple[Path, Probe, str]:
+    content, probe, digest = _bumps_only_fixture()
+    content = content[content.index('\n[[tool]]\nid = "helm"') :].replace('"helm"', '"combo"')
+    content += """
+[[tool.method]]
+kind = "github_release"
+repo = "o/r"
+asset = "side-{ver}.tar.gz"
+member = "bin/y"
+strip = 0
+"""
+    return _write_registry(tmp_path, content), probe, digest
+
+
+def test_bumps_only_dates_a_bumped_tool_whose_other_finding_stays_drifted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for directory, flags in (("flag", ["--bumps-only"]), ("plain", [])):
+        registry, probe, digest = _combo_bumps_only_fixture(tmp_path / directory)
+        code = main(
+            [
+                "--registry",
+                str(registry),
+                "--state",
+                str(registry.parent / "state.json"),
+                "--write",
+                *flags,
+            ],
+            probe=probe,
+            today=date(2026, 10, 15),
+        )
+        tool = tomllib.loads(registry.read_text())["tool"][0]
+        err = capsys.readouterr().err
+        assert code == 1
+        assert tool["method"][0]["version"] == "32.4.1"
+        assert tool["method"][0]["sha256"] == digest
+        assert "version" not in tool["method"][1] and "sha256" not in tool["method"][1]
+        assert tool["verified"] == (date(2026, 10, 15) if flags else date(2026, 10, 1))
+        assert ("dated combo" in err) == bool(flags)
+
+
+def _sublime_bumps_only_probe(*, fail_arm: bool = False) -> tuple[Probe, tuple[str, str]]:
+    old = _xz_tar_bytes({"sublime_text/sublime_text": b"z"})
+    x64 = _xz_tar_bytes({"sublime_text/sublime_text": b"x"})
+    arm = _xz_tar_bytes({"sublime_text/sublime_text": b"y"})
+    prefix = "https://download.example/sublime_text_build_"
+    payloads = {
+        prefix + "4200_x64.tar.xz": old,
+        prefix + "4200_arm64.tar.xz": old,
+        prefix + "4215_x64.tar.xz": x64,
+    }
+    if not fail_arm:
+        payloads[prefix + "4215_arm64.tar.xz"] = arm
+    probe, _ = _map_probe(Release(tag="1", digests={}), payloads=payloads)
+    return probe, (hashlib.sha256(x64).hexdigest(), hashlib.sha256(arm).hexdigest())
+
+
+def test_bumps_only_bumps_every_pinned_method_of_a_multi_method_tool(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _sublime_two_pin_registry(tmp_path)
+    before = tomllib.loads(registry.read_text())["tool"][0]
+    probe, digests = _sublime_bumps_only_probe()
+    code = main(
+        [
+            "--registry",
+            str(registry),
+            "--state",
+            str(tmp_path / "state.json"),
+            "--write",
+            "--bumps-only",
+            "--candidate",
+            "sublime=4215",
+        ],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    after = tomllib.loads(registry.read_text())["tool"][0]
+    assert code == 0
+    for index, digest in enumerate(digests):
+        old, new = before["method"][index], after["method"][index]
+        assert {key for key in old.keys() | new.keys() if old.get(key) != new.get(key)} == {
+            "version",
+            "sha256",
+        }
+        assert new["version"] == "4215"
+        assert new["sha256"] == digest
+    assert after["verified"] == date(2026, 10, 15)
+    assert capsys.readouterr().err.count("dated sublime") == 1
+
+
+def test_bumps_only_writes_nothing_for_a_tool_whose_candidate_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = _sublime_two_pin_registry(tmp_path)
+    before = registry.read_bytes()
+    probe, _ = _sublime_bumps_only_probe(fail_arm=True)
+    code = main(
+        [
+            "--registry",
+            str(registry),
+            "--state",
+            str(tmp_path / "state.json"),
+            "--write",
+            "--bumps-only",
+            "--candidate",
+            "sublime=4215",
+        ],
+        probe=probe,
+        today=date(2026, 10, 15),
+    )
+    assert code == 1
+    assert registry.read_bytes() == before
+    assert "dated sublime" not in capsys.readouterr().err
+
+
+def test_bumps_only_does_not_date_a_same_version_same_digest_candidate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tar = _gz_tar_bytes({"bin/x": b"old"})
+    digest = hashlib.sha256(tar).hexdigest()
+    url = "https://github.com/o/r/releases/download/31.0.2/a-31.0.2.tar.gz"
+    probe, _ = _map_probe(
+        Release(tag="v31.0.2", digests={"a-31.0.2.tar.gz": digest}), payloads={url: tar}
+    )
+    for directory, flags in (("flag", ["--bumps-only"]), ("plain", [])):
+        registry = _github_pin_registry(tmp_path / directory)
+        registry.write_text(registry.read_text().replace("a" * 64, digest))
+        before = registry.read_bytes()
+        code = main(
+            [
+                "--registry",
+                str(registry),
+                "--state",
+                str(registry.parent / "state.json"),
+                "--write",
+                "--candidate",
+                "helm=31.0.2",
+                *flags,
+            ],
+            probe=probe,
+            today=date(2026, 10, 15),
+        )
+        err = capsys.readouterr().err
+        assert code == 0
+        if flags:
+            assert registry.read_bytes() == before
+            assert "dated helm" not in err
+        else:
+            assert tomllib.loads(registry.read_text())["tool"][0]["verified"] == date(2026, 10, 15)
+            assert "dated helm" in err
 
 
 def test_candidate_flag_bumps_a_pin_without_a_release_source(tmp_path: Path) -> None:
