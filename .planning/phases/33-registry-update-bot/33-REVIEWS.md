@@ -155,3 +155,154 @@ Using the plan-review checklist to check each plan against the repository and it
 - **Completion must remain blocked on the live proof.** The spec requires proof before the phase is done (`.planning/phases/33-registry-update-bot/33-SPEC.md:29-32`). The dispatch-only rollout and owner-run checkpoint are valid staging decisions, but `human_needed`, a runbook, or green file tests are not evidence that BOT-02 has passed. Likewise, the scheduled behavior remains disabled until the follow-up is completed.
 - **Scratch cleanup instructions conflict with the mandatory host rule.** Each plan instructs full `make validate` and `make test` runs with the default `TMPDIR`, for example `33-01-PLAN.md:65`; the session’s mandatory rule requires an owned temporary directory exported to children and cleaned on every exit. The long-path test constraint needs a short, owned `TMPDIR` solution rather than dropping isolation.
 - **Verification scope.** No tests, containers, GitHub operations, or remote writes were run during this review; the proposed workflow and runbook do not yet exist to exercise. No scratch artifacts were created.
+
+
+## Lane Log (convergence cycle 2, plans at 2528bb05)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 13:59 | opencode-referee-one | one-shot probe | OK |
+| 13:59 to 14:03 | opencode-referee-one | real review through `gsd-tools query review-lane invoke`, background, 2700 s timeout, stdin `/dev/null`, prior findings supplied | exit 0, stderr empty |
+
+Failures this cycle: none. No other lane or model was used.
+
+## Orchestrator verification of the cycle 2 concerns
+
+Cycle 2 of 3. Real HIGH by cycle: 6, now 5 (second-order gaps in the round 1 fixes). Plan-internal findings were checked against the cited plan lines; claims that rest on repository code (`installer/verify_registry.py` candidate validation) are for the planner to verify. DECISIONS apply exactly; all provisional.
+
+| Id | Claim | Judgment and DECISION |
+|---|---|---|
+| H1 (33-03) | Identical registry bytes do not prove the existing proposal is usable: if `main` advances without changing `registry.toml` the bot branch keeps an old base and cannot be fast-forwarded; the skip also prevents a rerun from dispatching CI after a push that succeeded but a dispatch that failed | Real (`.claude/git-workflow.md:40-45`). DECISION: skip only when BOTH the bot branch's registry content is byte-identical AND its parent equals the run ref's current HEAD; an identical file on an old base counts as changed (new commit on the new base, force-update with the lease). On a skip, still dispatch CI when `gh run list --workflow ci.yml --branch <bot> --json headSha` shows no run for that head SHA (no commit, no push, no issue edit). Test both texts. |
+| H2 (33-03) | The claimed runtime no-main control is overstated: the plan says default-branch protection keeps the bot off `main`, but CONTEXT records that a `contents: write` token can fast-forward an already-green commit to `main` (no push restrictions) | Real wording defect (`33-CONTEXT.md:83-86`). DECISION: no claim that protection stops the token. The accurate statement everywhere (workflow header, issue body, threat T-33-11, runbook): the workflow contains no step that targets `main` (a structural guard, tested); the token itself could push an already-green commit to `main` because the repository has no push restrictions; the control is that only a user with write access can dispatch, and a dispatched ref runs its own code, so dispatch is the owner's act. The owner may close the gap with a push restriction (a repository setting, outside this phase): list it as an owner follow-up item in the deferred verification and backlog. No requirement amendment; BOT-03's acceptance is the structural one in the SPEC. |
+| M1 (33-03) | Old-branch deletion by name without an expected SHA can remove a ref changed after enumeration | Real, cheap. DECISION: enumerate with `git ls-remote --heads` and delete each with `--force-with-lease=<ref>:<sha>`; a rejected deletion is reported and skipped. |
+| M2 (33-03) | The issue is edited before the lease-protected push, so a failed push leaves it advertising a branch | Real. DECISION: the failure-report step covers a failed push as well as a failed dispatch (a comment on the issue naming the failed stage and the manual command); the issue upsert stays first (D-08: the commit carries the closing keyword). |
+| M3 (33-03) | `git fetch ... \|\| true` hides network and authentication errors as an absent branch | Real. DECISION: probe with `git ls-remote --heads origin <ref>` first (its failure fails the step; empty output means absent), fetch only when present, no `\|\| true` on the fetch itself; test the text. |
+| H3 (33-04) | The stale-pin command `--candidate drawio-desktop=32.6.1` is rejected by the verifier: a candidate older than the latest release gets its own drift finding and `_plan_bumps` refuses any non-OK candidate | Real by the referee's reading (`installer/verify_registry.py:294-330,1298-1314`); planner verifies. DECISION: drop the stale fixture and the proof ref entirely. The proof relies on the real drift that exists on the default branch (today draw.io 32.6.10 against 32.7.4); the runbook's first stage dispatches the bot on the default branch itself. If no bot branch appears, there was no drift: the runbook says STOP, nothing proved, retry when drift exists (never a pass). |
+| H4 (33-04) | The pushed proof ref can create the false-positive CI evidence the proof must exclude | Resolved by H3's DECISION (no proof ref is pushed). Add explicit identification: the bot-created SHA, its parent equals the default branch's tip, the CI run's event is `workflow_dispatch` and its head is that SHA, and STOP on any push-event check run for that SHA. |
+| M4 (33-04) | After UTC midnight the bot computes a different branch name, so the second run does not exercise the same-day skip | Real. DECISION: the runbook stops and restarts the proof when the UTC date changes between the two runs (no `DATE` reset). |
+| M5 (33-04) | A recorded owner decision is allowed to make BOT-02 read `passed` | Real. DECISION: `passed` only for demonstrated behavior (dispatched checks reported on the head and the fast-forward of that head accepted); a decision to use Option B or to investigate keeps BOT-02 `human_needed` or `blocked`, never `passed`. |
+| H5 (33-05) | The clean-tree recovery tells the executor to commit or remove any modified or untracked file outside `.planning`, which can destroy unrelated user work | Real. DECISION: assert only, never alter: check the expected files are tracked and that none of the phase's own files is dirty; any unrelated modified or untracked file is REPORTED and left alone. |
+| M6 (33-05) | The documented landing command pushes `bot/registry-<date>:main` using a possibly missing or stale local ref | Real. DECISION: the documented landing steps fetch the exact remote head, record its SHA, verify the checks for that SHA, then push that SHA (`git push origin "$SHA:refs/heads/main"`), never a branch name. |
+| L1 (33-05) | The consistency test extracts every `gh workflow run (\S+)` from the whole runbook and scripts, including prose | Constrain the extraction to the fenced command examples and the workflow `run:` text; test it. |
+| M7 (33-01) | A bumped tool is marked verified despite a known failing method elsewhere; the `verified` meaning differs between flagged and unflagged runs; the stated "the flag only narrows the edit set" is false | SPEC-driven (criterion 1: version, sha256 and verified change together), so the behavior stays (cycle 1 H1). DECISION: correct the statement (the flag keeps the bump edits and adds the date of a bumped tool even when a neighbour method is still drifted) in the threat entry, the docs and the issue-body sentence; document that after a bump `verified` certifies the bumped pins, while findings on other methods still appear in the drift report. Provisional, needs confirmation. |
+| X (cross) | Final gates with the default TMPDIR instead of an owned directory | REJECTED again (the doctor test wraps its output by path length and failed under executor-owned long TMPDIRs); ruling stays in the 33-01 ledger. |
+
+## OpenCode Review (opencode-referee-one), cycle 2
+
+Using the plan-review checklist to verify the revised plans against the source and the previous findings.
+# Phase 33 plan review — convergence cycle 2
+
+### Document Type
+
+GSD · implementation plans
+
+### Status: Issues Found — revise and re-review
+
+The revised plans address several first-cycle findings, notably the applied-bump date regression, explicit proof-head fetch, protection cleanup, and two-form cron test. **Execution should still wait:** the prescribed proof cannot reliably create its stale candidate, and the bot’s identical-content shortcut can strand a proposal without CI or on an obsolete base.
+
+## 33-01
+
+**Summary.** Add `--bumps-only`, retain applied version/hash edits, date bumped tools, and cover the flag with offline fixtures.
+
+**Findings status.** The prior HIGH finding about a bumped tool missing its date and the multi-method coverage finding are addressed in the proposed design and tests.
+
+**Strengths.**
+- The revised selection uses applied bump results, consistent with `_BumpResult` and `_build_bump_edits` in `installer/verify_registry.py:1176-1198`. The `combo` regression exercises the surviving drift finding at `tests/test_verify_registry.py:3345-3411`.
+- The guard is placed before probe construction and network work, alongside the existing candidate guard at `installer/verify_registry.py:1576-1594`.
+
+**Concerns.**
+- **MEDIUM — A bumped tool can be marked verified despite a known failing method.** `33-01-PLAN.md:111` dates every applied bump, including the deliberately drifted `combo` case at `33-01-PLAN.md:180`. The existing report considers a tool passing only when all its findings pass, and its current unflagged test deliberately retains the old date (`tests/test_verify_registry.py:3405-3411`). This makes the tool-level `verified` field mean different things depending on the flag and can conceal the known failure. The plan acknowledges the divergence but does not reconcile it with the existing whole-tool verification semantics.
+- **MEDIUM — The plan’s stated trust boundary is false.** `33-01-PLAN.md:214-216` says the flag only narrows the edit set; the new `combo` behavior adds a date that the unflagged path does not produce (`installer/verify_registry.py:1330-1339`). The threat model and documentation should not claim narrowing.
+
+**Suggestions.** Define and document whether `verified` certifies the whole tool or only the pinned candidate. If it remains whole-tool certification, do not publish a bump as a three-field change while another finding fails; test the chosen behavior.
+
+**Risk Assessment.** Medium: the edit mechanics are well grounded, but the meaning of a persisted catalog field changes.
+
+## 33-02
+
+**Summary.** Add bare `workflow_dispatch` to CI, preserve its push configuration and check names, and add structural contract tests.
+
+**Findings status.** The prior concern is addressed: the plan now explicitly separates file-level evidence from the live BOT-02 proof (`33-02-PLAN.md:23-28,183-191`).
+
+**Strengths.**
+- The proposed change matches the existing trigger, matrix, job name and concurrency configuration in `.github/workflows/ci.yml:3-22`.
+- The two named assertion amendments correspond to the existing checks in `tests/test_ci_workflow.py:36-53`.
+
+**Concerns.**
+- No new plan-specific blocking concern found. The live dispatch and protection result remains unresolved, not established by these tests.
+
+**Suggestions.** Retain the explicit `human_needed` status until the corrected live proof succeeds.
+
+**Risk Assessment.** Low for the YAML edit; BOT-02 remains dependent on the live proof.
+
+## 33-03
+
+**Summary.** Add a dispatch-only bot that verifies pins, compares the proposed registry with the dated branch, upserts an issue, pushes with an explicit lease, dispatches CI, and deletes older bot refs.
+
+**Findings status.**
+- Numeric issue validation is addressed (`33-03-PLAN.md:196-209`).
+- Dispatch retry and issue annotation improve the previous failure path, but do not provide reliable automatic recovery.
+- Identical-registry reruns now skip publication, but the comparison is too narrow.
+- The prior no-main security concern and deletion risk are documented as accepted; documentation does not itself enforce the stronger claims.
+
+**Strengths.**
+- The planned exact permissions match D-07, while the existing drift workflow remains read-only for contents (`33-03-PLAN.md:153-158`; `.github/workflows/verify-registry.yml:13-15`).
+- The explicit expected-SHA lease protects the current dated ref from a concurrent replacement between fetch and push (`33-03-PLAN.md:162-164`).
+
+**Concerns.**
+- **HIGH — Identical registry bytes do not prove the existing proposal is usable.** `33-03-PLAN.md:162-164` skips the issue, push, and CI dispatch solely when `registry.toml` matches. If `main` advances without changing that file, the bot branch remains based on the old commit and cannot be fast-forwarded to the new `main`; the repository requires updating and retesting an out-of-date branch (`.claude/git-workflow.md:40-45`). The same skip also prevents a rerun from dispatching CI after the previous push succeeded but dispatch failed (`33-03-PLAN.md:208-211`). The issue comment helps only if it succeeds and a person acts on it.
+- **HIGH — The claimed runtime no-main control is overstated.** The plan says default-branch protection “keeps this bot off” main (`33-03-PLAN.md:153,243,256`), but the phase context explicitly records that a token with `contents: write` can fast-forward an already-green commit to main because there are no push restrictions (`33-CONTEXT.md:83-86`). A dispatched ref’s own code receives the write-capable job token (`33-03-PLAN.md:242-243`). Required checks limit *which* commit can land; they do not prove that the token cannot push. This remains a gap against the absolute prohibition in `33-SPEC.md:34-37`.
+- **MEDIUM — Old-branch deletion can remove a ref changed after enumeration.** The plan enumerates refs then deletes them by name without an expected SHA (`33-03-PLAN.md:199,211`). Accepting replacement of older proposals does not protect a concurrently updated ref from deletion. The current-branch lease does not apply to deletions.
+- **MEDIUM — The issue can advertise a branch before a failed push.** The issue is edited or created before the lease-protected push (`33-03-PLAN.md:208-209`). If the lease rejects or the push fails, the issue names a branch that may not exist or may still contain a different head; the failure-report step only handles dispatch failure (`33-03-PLAN.md:210`).
+- **MEDIUM — Fetch errors are indistinguishable from an absent branch.** The prescribed `git fetch ... || true` suppresses authentication, network, and server errors as well as a missing ref (`33-03-PLAN.md:162`). A subsequent empty expected SHA generally makes a push to an existing ref fail safely, but the run can already have updated the tracking issue. Fail closed on unexpected fetch errors.
+
+**Suggestions.** Compare both the proposed content **and base/head validity**, and recover missing CI independently of whether a new commit is needed. Report push as well as dispatch failures. Use expected-SHA deletion or stop on changed refs. Correct the security statement and establish a control that actually meets BOT-03, or explicitly obtain an amendment to the absolute requirement.
+
+**Risk Assessment.** High: this workflow has repository write authority, and static YAML scans cannot establish the runtime guarantees.
+
+## 33-04
+
+**Summary.** Provide an owner-run proof runbook with preflight, exact bot-head fetching, a temporary protected target, cleanup, and a later cron-enabling step.
+
+**Findings status.** The previous missing-local-ref, explicit protection-removal, preflight, and unverified-fallback concerns are materially addressed in the plan. New blockers remain in the prescribed proof itself.
+
+**Strengths.**
+- Fetching the bot head and using its SHA addresses the former missing-local-ref problem (`33-04-PLAN.md:130-131,164`).
+- The preflight and recorded issue number reduce the risk of closing an existing proposal; protection removal is specified before deleting the protected target (`33-04-PLAN.md:120-121,173`).
+
+**Concerns.**
+- **HIGH — The prescribed stale-pin command is rejected by the verifier.** The runbook is to run `--candidate drawio-desktop=32.6.1` while a newer stable release exists (`33-04-PLAN.md:97,130`). Candidate validation runs `check_registry` on the candidate (`installer/verify_registry.py:1298-1304`), which independently creates a drift finding when its pin is older than the latest release (`installer/verify_registry.py:294-330`). `_plan_bumps` then refuses a candidate with any non-OK finding (`installer/verify_registry.py:1302-1314`). Consequently the command does not reliably create the stale registry commit that the proof needs.
+- **HIGH — The proof’s ref can create the very false-positive CI evidence it is meant to exclude.** The owner pushes `proof/registry-bot-$DATE` before the bot runs (`33-04-PLAN.md:130`), and existing CI runs on all branch pushes except `main` (`.github/workflows/ci.yml:3-7`). The bot’s new commit is distinct when it successfully bumps, but if stale-pin setup is skipped or fails, the runbook does not require proving the expected changed parent and bot commit before proceeding. The test should explicitly identify the bot-created SHA, parent and dispatch run, and stop on any unexpected push-event check for that SHA.
+- **MEDIUM — Midnight handling is not sufficient.** `33-04-PLAN.md:128` tells the owner to reset `DATE` to the existing branch date after UTC midnight, but the bot independently computes its branch name at each run (`33-03-PLAN.md:159`). A second run after midnight creates a different branch instead of exercising the same-day skip. Stop and restart the proof if the UTC date changes.
+- **MEDIUM — “Recorded owner decision” is not itself proof of BOT-02.** `33-04-PLAN.md:175` allows `passed` after a recorded owner decision, even though `33-SPEC.md:29-32` requires a successful dispatch/protection proof or a stop for a token-route choice. A decision to investigate or use an unverified fallback must not make the original requirement pass.
+
+**Suggestions.** Construct the stale fixture using real, independently verified historical pins without asking the current candidate verifier to accept an outdated candidate; verify the actual registry diff before pushing. Require exact event, SHA, ancestry and check evidence, fail safely across midnight, and reserve `passed` for demonstrated behavior or an explicitly amended requirement.
+
+**Risk Assessment.** High: the current runbook can fail before the intended proof and could misclassify its result.
+
+## 33-05
+
+**Summary.** Add grouped weekly Dependabot configuration, owner documentation, cross-file consistency tests, and final gates.
+
+**Findings status.** The previous cron-follow-up concern is addressed by a helper designed for both forms (`33-05-PLAN.md:180-184`). The subject-derived baseline is removed, although the replacement clean-tree instruction has its own safety problem.
+
+**Strengths.**
+- The proposed parse test constrains the single ecosystem, schedule, directory and group (`33-05-PLAN.md:113-120`).
+- The docs-only classification is grounded in `devtools/docs_only.py:18-35`; the existing workflow guide requires green checks on the exact fast-forwarded commit (`.claude/git-workflow.md:35-45`).
+
+**Concerns.**
+- **HIGH — The clean-tree recovery can destroy unrelated user work.** `33-05-PLAN.md:190,198-199` tells the executor to commit or remove *any* modified or untracked file outside `.planning`. That can include pre-existing or concurrent user work unrelated to this phase. A clean-tree assertion does not establish ownership of a file.
+- **MEDIUM — The documented landing command can use the wrong local ref.** `33-05-PLAN.md:151` says to fetch the bot branch and then push `bot/registry-<date>:main`. An ordinary fetch normally creates or updates a remote-tracking ref, not necessarily a local branch named `bot/registry-<date>`; a stale local branch of that name could also select the wrong commit. This repeats the source-ref issue fixed in the proof plan. Use a fetched, verified SHA or explicitly created and verified local ref.
+- **LOW — The phase-end consistency test captures command-like prose as well as commands.** `33-05-PLAN.md:183` extracts every `gh workflow run (\S+)` from the entire runbook and bot scripts. Keep explanatory examples and the failed-dispatch issue body within that contract, or constrain extraction to actual command examples.
+
+**Suggestions.** Record a baseline and report unrelated work without altering it. Make landing instructions fetch and verify the exact remote head, verify checks for that SHA, then push that SHA.
+
+**Risk Assessment.** Medium-to-high: the configuration is small, but the cleanup instruction risks user data and the landing guidance can select an unintended source ref.
+
+## Cross-plan assessment
+
+1. **Phase completion remains blocked.** The live proof and cron enablement are deferred (`33-04-PLAN.md:57-60`; `33-05-PLAN.md:231-240`). That staging is consistent with the chosen rollout, but it is not completion of the live acceptance criterion in `33-SPEC.md:29-32`.
+2. **Mandatory scratch isolation remains unresolved.** All five plans prescribe default `TMPDIR` for full gates, for example `33-01-PLAN.md:68`, despite the session’s mandatory owned-directory and cleanup rule. The known path-length-sensitive test explains why a *long* path fails; it does not authorize unowned scratch space. Use a sufficiently short owned directory, or fix the path-sensitive test without weakening its assertion.
+3. **The new tests predominantly inspect text.** They can establish wiring conventions, but cannot establish shell error handling, race behavior, or live GitHub protection. The runbook correctly carries some live work forward, but the failure cases above need executable regression coverage or an explicit, safe owner verification procedure.
+
+**Not checked:** No tests, containers, GitHub operations, or remote writes were run; no scratch files were created. GitHub protection behavior remains a live-proof risk, not an established result.
