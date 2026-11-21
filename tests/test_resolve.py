@@ -35,6 +35,22 @@ def test_macos_prefers_brew_then_script():
     assert [m.kind for m in resolve_methods(tool, platform)] == ["brew", "script"]
 
 
+@pytest.mark.parametrize("os_name", ["macos", "fedora"])
+def test_prefer_ranks_a_script_before_brew(os_name: str) -> None:
+    platform = Platform(os=os_name, arch="amd64", immutable=False, has_brew=True)
+    preferred = Method("script", {"prefer": True})
+    script = Method("script")
+    brew = Method("brew")
+    for methods in ((preferred, brew), (brew, preferred)):
+        tool = Tool(id="t", name="t", category="c", cmd="t", methods=methods)
+        assert [m.kind for m in resolve_methods(tool, platform)] == ["script", "brew"]
+        assert [m.kind for m in resolve_methods(tool, replace(platform, has_brew=False))] == [
+            "script"
+        ]
+    tool = Tool(id="t", name="t", category="c", cmd="t", methods=(script, brew))
+    assert [m.kind for m in resolve_methods(tool, platform)] == ["brew", "script"]
+
+
 def test_userspace_before_native():
     platform = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
     tool = _tool("dnf", "github_release")

@@ -1926,6 +1926,69 @@ def test_config_paths_allow_a_shared_entry_and_one_tools_own_nesting(tmp_path: P
     assert tools["c"].config_paths == ("~/.config/x", "~/.config/x/y")
 
 
+def _handoff_registry(extra: str) -> str:
+    return f"""
+[[tool]]
+id = "demo"
+category = "search"
+tier = "user"
+[[tool.method]]
+kind = "script"
+{extra}
+"""
+
+
+def test_handoff_name_is_validated(tmp_path: Path) -> None:
+    def load(text: str) -> list[Tool]:
+        return load_tools(_write(tmp_path, _handoff_registry(text)))
+
+    params = (
+        load('handoff = "xcode-clt"\ndetect_path = "/usr/bin/x"\nwritable_prefix = "/opt/x"')[0]
+        .methods[0]
+        .params
+    )
+    assert params["handoff"] == "xcode-clt"
+    assert params["detect_path"] == "/usr/bin/x"
+    assert params["writable_prefix"] == "/opt/x"
+    for value in ('"free text"', "3", '""'):
+        with pytest.raises(ValueError, match="handoff"):
+            load(f"handoff = {value}")
+    for line in (
+        'url = "https://example.test"',
+        'shell = "sh"',
+        'env = {A = "1"}',
+        'args = ["x"]',
+        'install = ["gh"]',
+        'update = ["gh"]',
+        'remove = ["gh"]',
+        'paths = ["~/a/b"]',
+    ):
+        with pytest.raises(ValueError, match="handoff"):
+            load(f'handoff = "xcode-clt"\n{line}')
+
+
+def test_prefer_is_validated(tmp_path: Path) -> None:
+    brew = '\n[[tool.method]]\nkind = "brew"\nformula = "demo"\n'
+
+    def load(extra: str, suffix: str = brew) -> list[Tool]:
+        return load_tools(_write(tmp_path, _handoff_registry(extra) + suffix))
+
+    assert load("prefer = true")[0].methods[0].params["prefer"] is True
+    for value in ("false", '"yes"'):
+        with pytest.raises(ValueError, match="prefer"):
+            load(f"prefer = {value}")
+    with pytest.raises(ValueError, match="prefer"):
+        load("prefer = true", "")
+    with pytest.raises(ValueError, match="prefer"):
+        load("prefer = true", '\n[[tool.method]]\nkind = "script"\nprefer = true\n' + brew)
+    for kind in METHOD_KINDS:
+        if kind == "script":
+            continue
+        manifest = _handoff_registry("prefer = true").replace('kind = "script"', f'kind = "{kind}"')
+        with pytest.raises(ValueError, match="unknown key 'prefer'"):
+            load_tools(_write(tmp_path, manifest))
+
+
 def _script_tool(extra: str) -> str:
     return f"""
 [[tool]]
@@ -2052,6 +2115,142 @@ def test_latest_npm_borrows_no_other_kinds_key(tmp_path: Path, method: str, key:
     )
     with pytest.raises(ValueError, match=f"has unknown key '{key}'"):
         load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        '["sudo", "gh", "x"]',
+        '["pkexec", "gh"]',
+        '["/usr/bin/doas", "gh"]',
+        "[]",
+        '"gh extension install x"',
+        '["gh", "a b"]',
+        '["gh", "{omz_root}/x"]',
+        "[1, 2]",
+    ],
+)
+def test_script_install_is_refused_at_load(tmp_path: Path, value: str) -> None:
+    manifest = _write(
+        tmp_path,
+        _script_tool(f"install = {value}").replace(
+            'url = "https://example.test/i.sh"\nshell = "sh"\n', ""
+        ),
+    )
+    with pytest.raises(ValueError, match="install"):
+        load_tools(manifest)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        'url = "https://example.test/x"',
+        'shell = "sh"',
+        'env = { X = "1" }',
+        'args = ["x"]',
+        'writable_prefix = "/usr/local"',
+    ],
+)
+def test_script_install_refuses_curl_route_keys(tmp_path: Path, extra: str) -> None:
+    body = _script_tool(f'install = ["gh", "x"]\n{extra}').replace(
+        'url = "https://example.test/i.sh"\nshell = "sh"\n', ""
+    )
+    with pytest.raises(ValueError, match=f"install.*{extra.split(' =')[0]}"):
+        load_tools(_write(tmp_path, body))
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        'detect_path = "~/.local/share/x"',
+        'paths = ["~/.local/share/x/"]',
+        'update = ["gh", "extension", "upgrade", "x"]',
+    ],
+)
+def test_script_install_accepts_lifecycle_keys(tmp_path: Path, extra: str) -> None:
+    body = _script_tool(f'install = ["gh", "x"]\n{extra}').replace(
+        'url = "https://example.test/i.sh"\nshell = "sh"\n', ""
+    )
+    assert load_tools(_write(tmp_path, body))[0].methods[0].params["install"] == ["gh", "x"]
+
+
+@pytest.mark.parametrize("key", ["install", "update", "remove"])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["softwareupdate", "-i", "-a"],
+        ["/usr/sbin/softwareupdate", "--install"],
+        ["env", "softwareupdate", "-i"],
+        ["gh", "softwareupdate"],
+        ["sh", "-c", "xcode-select"],
+        ["bash", "-c", "x"],
+        ["zsh", "x"],
+        ["dash", "x"],
+        ["fish", "x"],
+        ["/bin/sh", "-c", "x"],
+        ["/usr/bin/bash", "x"],
+        ["xcode-select", "x"],
+        ["/usr/bin/xcode-select", "x"],
+        ["env", "xcode-select", "--install"],
+        ["env", "sh", "-c", "x"],
+        ["/usr/bin/env", "gh", "x"],
+        ["gh", "xcode-select"],
+        ["gh", "extension", "bash"],
+        ["gh", "x", "/usr/bin/doas"],
+        *[[word, "x"] for word in ("exec", "command", "nohup", "nice", "time", "timeout", "xargs")],
+        *[
+            ["gh", word]
+            for word in ("exec", "command", "nohup", "nice", "time", "timeout", "xargs")
+        ],
+    ],
+)
+def test_script_argv_refuses_shell_xcode_select_and_launcher_words_at_any_position(
+    tmp_path: Path, key: str, argv: list[str]
+) -> None:
+    import json
+
+    refused = {
+        "sudo",
+        "pkexec",
+        "doas",
+        "sh",
+        "bash",
+        "zsh",
+        "dash",
+        "fish",
+        "xcode-select",
+        "softwareupdate",
+        "env",
+        "exec",
+        "command",
+        "nohup",
+        "nice",
+        "time",
+        "timeout",
+        "xargs",
+    }
+    token = next(word for word in argv if word.rsplit("/", 1)[-1] in refused)
+    body = _script_tool(f"{key} = {json.dumps(argv)}").replace(
+        'url = "https://example.test/i.sh"\nshell = "sh"\n', ""
+    )
+    with pytest.raises(ValueError) as exc:
+        load_tools(_write(tmp_path, body))
+    assert key in str(exc.value)
+    assert token in str(exc.value)
+
+
+@pytest.mark.parametrize("key", ["install", "update", "remove"])
+def test_script_argv_accepts_fixed_command(tmp_path: Path, key: str) -> None:
+    body = _script_tool(
+        f'{key} = ["gh", "extension", "install", "https://github.com/github/gh-stack"]'
+    ).replace('url = "https://example.test/i.sh"\nshell = "sh"\n', "")
+    assert load_tools(_write(tmp_path, body))[0].methods[0].params[key] == [
+        "gh",
+        "extension",
+        "install",
+        "https://github.com/github/gh-stack",
+    ]
+    assert load_tools(REGISTRY)
 
 
 def test_unknown_script_key_is_still_rejected(tmp_path: Path) -> None:

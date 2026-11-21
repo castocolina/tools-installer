@@ -93,10 +93,15 @@ def _applies(method: Method, platform: Platform) -> bool:
     return _NATIVE_OS[kind] == platform.os
 
 
+def _sort_key(method: Method) -> int:
+    # The preference is validated at load; the shared rank ladder stays unchanged.
+    return 0 if method.params.get("prefer") is True else _RANK[method.kind]
+
+
 def resolve_methods(tool: Tool, platform: Platform) -> list[Method]:
     """Return the tool's platform-applicable methods, ordered by the priority ladder."""
     applicable = [m for m in tool.methods if _applies(m, platform)]
-    return sorted(applicable, key=lambda m: _RANK[m.kind])
+    return sorted(applicable, key=_sort_key)
 
 
 NEEDS_TOOLS = "needs distrobox and podman"

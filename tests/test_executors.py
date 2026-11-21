@@ -50,6 +50,25 @@ def test_native_kind_is_a_manual_handoff_and_never_executed(kind: str, command: 
     assert calls == []
 
 
+def test_needs_manual_hands_off_a_named_method_unconditionally() -> None:
+    method = Method("script", {"handoff": "xcode-clt", "writable_prefix": "/opt/x"})
+    for writable in (True, False):
+        handoff = executors.needs_manual(method, writable=lambda _, value=writable: value)
+        assert handoff is not None
+        assert handoff.command == "xcode-select --install"
+        assert "`xcode-select --install`" in handoff.reason
+    ordinary = Method("script", {"url": "https://example.test", "writable_prefix": "/opt/x"})
+    assert executors.needs_manual(ordinary, writable=lambda _: True) is None
+
+
+def test_a_handoff_method_is_never_run() -> None:
+    calls, runner = _record()
+    method = Method("script", {"handoff": "xcode-clt", "writable_prefix": "/opt/x"})
+    with pytest.raises(ExecutorError, match="hand-off method is never run"):
+        execute(method, runner)
+    assert calls == []
+
+
 def test_only_native_kinds_are_manual_handoffs():
     brew = Method(kind="brew", params={"formula": "jq"})
     assert executors.needs_manual(brew, writable=lambda _prefix: True) is None
@@ -146,6 +165,25 @@ def test_native_kinds_have_no_executor():
 
 
 _ELEVATION_WORDS = frozenset({"sudo", "pkexec", "doas"})
+_REFUSED_WORDS = _ELEVATION_WORDS | frozenset(
+    {
+        "sh",
+        "bash",
+        "zsh",
+        "dash",
+        "fish",
+        "xcode-select",
+        "softwareupdate",
+        "env",
+        "exec",
+        "command",
+        "nohup",
+        "nice",
+        "time",
+        "timeout",
+        "xargs",
+    }
+)
 
 
 def test_no_registry_argv_starts_with_an_elevation_command():
@@ -154,9 +192,9 @@ def test_no_registry_argv_starts_with_an_elevation_command():
         f"{tool.id}:{key}"
         for tool in load_tools(Path(__file__).resolve().parents[1] / "installer" / "registry.toml")
         for method in tool.methods
-        for key in ("remove", "update")
+        for key in ("install", "remove", "update")
         if isinstance(argv := method.params.get(key), list)
-        and Path(str(cast(list[object], argv)[0])).name in _ELEVATION_WORDS
+        and any(Path(str(token)).name in _REFUSED_WORDS for token in cast(list[object], argv))
     ]
     assert offenders == []
 
@@ -169,9 +207,45 @@ def test_no_argv_literal_starts_with_an_elevation_command():
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
                 first = node.elts[0]
-                if isinstance(first, ast.Constant) and first.value in _ELEVATION_WORDS:
+                if isinstance(first, ast.Constant) and first.value in (
+                    _ELEVATION_WORDS | {"softwareupdate"}
+                ):
                     offenders.append(f"{path.relative_to(root)}:{node.lineno}")
     assert offenders == []
+
+
+def test_script_install_argv_loads_and_runs_exactly_that_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.engine import install_tool
+    from installer.enums import InstallStatus
+    from installer.platform import Platform
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path))
+    manifest = tmp_path / "registry.toml"
+    manifest.write_text("""
+[[tool]]
+id = "gh-stack"
+category = "dev"
+tier = "user"
+verified = 2026-01-01
+[[tool.method]]
+kind = "script"
+install = ["gh", "extension", "install", "https://github.com/github/gh-stack"]
+detect_path = "~/.local/share/gh/extensions/gh-stack/manifest.yml"
+paths = ["~/.local/share/gh/extensions/gh-stack/"]
+""")
+    (tool,) = load_tools(manifest)
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        tool,
+        Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        runner=calls.append,
+        present=lambda _tool: False,
+    )
+    assert outcome.status is InstallStatus.INSTALLED
+    assert calls == [["gh", "extension", "install", "https://github.com/github/gh-stack"]]
 
 
 def test_uv_tool_executor_builds_uv_tool_install() -> None:

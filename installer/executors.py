@@ -473,6 +473,13 @@ def _env_prefix(method: Method) -> str:
 
 
 def _script(method: Method, runner: Runner) -> None:
+    if "handoff" in method.params:
+        raise ExecutorError("a hand-off method is never run")
+    install = method.params.get("install")
+    if isinstance(install, list):
+        # Registry validation fixes the argv; production runners close stdin.
+        runner([str(token) for token in cast(list[object], install)])
+        return
     url = require_str(method, "url")
     shell = method.params.get("shell")
     shell = shell if isinstance(shell, str) and shell else "sh"
@@ -729,6 +736,15 @@ _MANUAL_COMMANDS: dict[str, tuple[str, str]] = {
 }
 
 
+# Display strings only; nothing in this table is ever executed.
+_HANDOFF_COMMANDS: dict[str, tuple[str, str]] = {
+    "xcode-clt": (
+        "Apple's installer needs an administrator (never run here)",
+        "xcode-select --install",
+    ),
+}
+
+
 def prefix_writable(prefix: str) -> bool:
     """Whether this user can create `prefix` without elevation. Any OSError answers False.
 
@@ -757,6 +773,10 @@ def needs_manual(method: Method, *, writable: Callable[[str], bool]) -> ManualHa
     `writable` says the prefix is not writable: its vendor installer would escalate to create it.
     """
     if method.kind == "script":
+        name = method.params.get("handoff")
+        if isinstance(name, str):
+            why, command = _HANDOFF_COMMANDS[name]
+            return ManualHandoff(f"{why}; you run: `{command}`", command)
         prefix = method.params.get("writable_prefix")
         if not isinstance(prefix, str) or writable(prefix):
             return None

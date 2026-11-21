@@ -76,9 +76,13 @@ def command_error_line(exc: CommandError) -> str:
 
 
 def run_command(cmd: list[str]) -> None:
-    """Real Runner: run argv, raise CommandError on non-zero exit."""
+    """Real Runner: run argv, raise CommandError on non-zero exit.
+
+    Close stdin and detach the terminal so prompts fail fast (D-10, SPEC R7).
+    Ctrl+C does not reach the child directly; subprocess.run kills the direct child on interrupt.
+    """
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, stdin=subprocess.DEVNULL, start_new_session=True)
     except subprocess.CalledProcessError as exc:
         raise CommandError(cmd, exc.returncode) from exc
     except OSError as exc:

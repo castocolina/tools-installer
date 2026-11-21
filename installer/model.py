@@ -22,6 +22,9 @@ POSTINSTALL_HOOK_NAMES: frozenset[str] = frozenset(
     {"codegraph-mcp-register", "herdr-integration", "tealdeer-cache"}
 )
 
+# Duplicated (not imported) from installer/executors.py::_HANDOFF_COMMANDS's keys.
+HANDOFF_NAMES: frozenset[str] = frozenset({"xcode-clt"})
+
 METHOD_KINDS = (
     "script",
     "node",
@@ -54,6 +57,9 @@ METHOD_PARAMS: dict[str, frozenset[str]] = {
             "smoke_argv",
             "refuses_existing",
             "paths",
+            "install",
+            "handoff",
+            "prefer",
             "remove",
             "update",
             "writable_prefix",
@@ -551,18 +557,30 @@ def _is_argv(raw: object, token_ok: Callable[[str], bool]) -> bool:
 ELEVATION_COMMANDS = frozenset({"sudo", "pkexec", "doas"})
 
 
-def _elevation_head(raw: object) -> str | None:
-    """The argv's first word when it (or its basename) is an elevation command, else None."""
-    if not isinstance(raw, list) or not raw:
-        return None
-    head = cast(list[object], raw)[0]
-    return head if isinstance(head, str) and head.rsplit("/", 1)[-1] in ELEVATION_COMMANDS else None
+SHELL_HEADS = frozenset({"sh", "bash", "zsh", "dash", "fish"})
+NEVER_RUN_HEADS = frozenset({"xcode-select", "softwareupdate"})
+LAUNCHER_HEADS = frozenset({"env", "exec", "command", "nohup", "nice", "time", "timeout", "xargs"})
+
+
+def _refused_token(raw: object) -> tuple[int, str] | None:
+    """Find a forbidden command anywhere in a registry argv."""
+    if isinstance(raw, list):
+        for index, token in enumerate(cast(list[object], raw)):
+            if isinstance(token, str) and token.rsplit("/", 1)[-1] in (
+                ELEVATION_COMMANDS | SHELL_HEADS | NEVER_RUN_HEADS | LAUNCHER_HEADS
+            ):
+                return index, token
+    return None
 
 
 def _script_refusal(raw: object) -> str:
     """Name the first refused token of a script argv value, else the shape it must have."""
-    if (head := _elevation_head(raw)) is not None:
-        return f"starts with the elevation command '{head}'"
+    if (refused := _refused_token(raw)) is not None:
+        index, token = refused
+        return (
+            f"contains the refused word '{token}' at position {index} "
+            "(an elevation command, a shell, a launcher, xcode-select or softwareupdate)"
+        )
     if isinstance(raw, list):
         for token in cast(list[object], raw):
             if isinstance(token, str) and (why := _script_token_ok(token)) is not None:
@@ -800,14 +818,49 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
                     "matching ^[A-Za-z0-9=._:/+-]+$"
                 )
             if kind == "script":
-                for key in ("remove", "update"):
+                if "handoff" in params:
+                    name = params["handoff"]
+                    if not isinstance(name, str) or name not in HANDOFF_NAMES:
+                        known = ", ".join(sorted(HANDOFF_NAMES))
+                        raise ValueError(f"tool '{row['id']}': handoff must be one of: {known}")
+                    for key in (
+                        "url",
+                        "shell",
+                        "env",
+                        "args",
+                        "install",
+                        "update",
+                        "remove",
+                        "paths",
+                    ):
+                        if key in params:
+                            raise ValueError(
+                                f"tool '{row['id']}': handoff cannot be combined with '{key}'"
+                            )
+                if "prefer" in params and params["prefer"] is not True:
+                    raise ValueError(f"tool '{row['id']}': prefer must be true")
+                for key in ("install", "remove", "update"):
                     if key in params and (
                         not _is_argv(params[key], lambda token: _script_token_ok(token) is None)
-                        or _elevation_head(params[key]) is not None
+                        or _refused_token(params[key]) is not None
                     ):
                         raise ValueError(
                             f"tool '{row['id']}': method 'script' key '{key}' "
                             f"{_script_refusal(params[key])}"
+                        )
+                if "install" in params:
+                    for key in ("url", "shell", "env", "args", "writable_prefix"):
+                        if key in params:
+                            raise ValueError(
+                                f"tool '{row['id']}': method 'script' key 'install' "
+                                f"cannot be combined with '{key}'"
+                            )
+                    if any(
+                        "{" in token or "}" in token for token in cast(list[str], params["install"])
+                    ):
+                        raise ValueError(
+                            f"tool '{row['id']}': method 'script' key 'install' "
+                            "cannot use placeholders"
                         )
                 if "paths" in params and (why := _script_paths_refusal(params["paths"])):
                     raise ValueError(f"tool '{row['id']}': method 'script' key 'paths' {why}")
@@ -831,6 +884,11 @@ def load_tools(manifest_path: str | Path, *, today: date | None = None) -> list[
             if kind == "cargo_distrobox" and (why := _cargo_distrobox_refusal(params)):
                 raise ValueError(f"tool '{row['id']}': method 'cargo_distrobox' {why}")
             methods.append(Method(kind=kind, params=params, os=os_targets, arch=arch_targets))
+        preferred = [method for method in methods if method.params.get("prefer") is True]
+        if len(preferred) > 1 or (preferred and not any(m.kind == "brew" for m in methods)):
+            raise ValueError(
+                f"tool '{row['id']}': prefer requires brew and at most one preferred method"
+            )
         context = f"tool '{row['id']}'"
         requires = _parse_id_list(row.get("requires", []), "requires", context)
         config_paths = _parse_config_paths(row.get("config_paths", []), tool_id=row["id"])

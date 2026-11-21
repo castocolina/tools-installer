@@ -1,11 +1,14 @@
+import inspect
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from pathlib import Path
 from typing import TypedDict, Unpack
 
@@ -54,7 +57,9 @@ class _PopenKwargs(TypedDict):
 def test_run_command_success(monkeypatch: pytest.MonkeyPatch):
     seen: dict[str, object] = {}
 
-    def fake_run(cmd: list[str], check: bool):
+    def fake_run(
+        cmd: list[str], check: bool, stdin: object = None, start_new_session: bool = False
+    ):
         seen["cmd"] = cmd
         seen["check"] = check
 
@@ -65,7 +70,9 @@ def test_run_command_success(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_run_command_raises_on_nonzero(monkeypatch: pytest.MonkeyPatch):
-    def fake_run(cmd: list[str], check: bool):
+    def fake_run(
+        cmd: list[str], check: bool, stdin: object = None, start_new_session: bool = False
+    ):
         raise subprocess.CalledProcessError(returncode=2, cmd=cmd)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -76,13 +83,110 @@ def test_run_command_raises_on_nonzero(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_run_command_raises_when_binary_missing(monkeypatch: pytest.MonkeyPatch):
-    def fake_run(cmd: list[str], check: bool):
+    def fake_run(
+        cmd: list[str], check: bool, stdin: object = None, start_new_session: bool = False
+    ):
         raise FileNotFoundError(cmd[0])
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(CommandError) as exc:
         run_command(["nope"])
     assert exc.value.returncode == 127
+
+
+def test_run_command_passes_devnull_stdin_and_a_new_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], *, check: bool, stdin: object, start_new_session: bool) -> None:
+        seen.update(check=check, stdin=stdin, start_new_session=start_new_session)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    run_command(["x"])
+    assert seen == {"check": True, "stdin": subprocess.DEVNULL, "start_new_session": True}
+
+
+def test_the_default_install_runner_is_the_stdin_closed_run_command() -> None:
+    from installer.engine import install_tool
+
+    assert inspect.signature(install_tool).parameters["runner"].default is run_command
+
+
+def test_run_command_closes_stdin_for_the_child() -> None:
+    root = Path(__file__).resolve().parents[1]
+    program = """import sys
+from installer.run import run_command
+run_command([sys.executable, '-c', "import sys; sys.exit(0 if sys.stdin.read() == '' else 3)"])
+"""
+    parent = subprocess.Popen(
+        [sys.executable, "-c", program],
+        stdin=subprocess.PIPE,
+        start_new_session=True,
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(root)},
+    )
+    try:
+        code = parent.wait(timeout=15)
+    finally:
+        with suppress(ProcessLookupError):
+            os.killpg(parent.pid, signal.SIGKILL)
+        if parent.stdin is not None:
+            parent.stdin.close()
+        parent.wait()
+    assert code == 0
+
+
+def test_run_command_detaches_the_controlling_terminal() -> None:
+    root = Path(__file__).resolve().parents[1]
+    program = """import errno, os, pty, select, signal, subprocess, sys, time
+pid, master = pty.fork()
+if pid == 0:
+    control = subprocess.run([sys.executable, '-c', "open('/dev/tty').close()"], check=False)
+    if control.returncode:
+        os._exit(4)
+    from installer.run import run_command
+    probe = ("try:\\n open('/dev/tty').close()\\nexcept OSError:\\n"
+             " raise SystemExit(0)\\nraise SystemExit(3)")
+    try:
+        run_command([sys.executable, '-c', probe])
+    except Exception:
+        os._exit(1)
+    os._exit(0)
+deadline = time.monotonic() + 15
+while True:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        os.killpg(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+        sys.exit(5)
+    ready, _, _ = select.select([master], [], [], remaining)
+    if not ready:
+        continue
+    try:
+        data = os.read(master, 4096)
+    except OSError as exc:
+        if exc.errno != errno.EIO:
+            raise
+        break
+    if not data:
+        break
+_, status = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(status))
+"""
+    helper = subprocess.Popen(
+        [sys.executable, "-c", program],
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(root)},
+        start_new_session=True,
+    )
+    try:
+        code = helper.wait(timeout=20)
+    finally:
+        with suppress(ProcessLookupError):
+            os.killpg(helper.pid, signal.SIGKILL)
+        helper.wait()
+    assert code == 0
 
 
 def test_run_output_returns_stdout() -> None:
