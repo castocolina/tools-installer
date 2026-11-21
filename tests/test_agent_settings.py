@@ -2471,6 +2471,208 @@ def test_a_codex_server_is_one_ownership_unit_on_revert(
     assert read_ledger("codex") is None
 
 
+def test_ledger_preview_filters_by_setting(tmp_path: Path) -> None:
+    mcp = _mcp_apply("codex", tmp_path)
+    assert mcp.refused is None
+    assert (
+        apply_setting("codex", "auto-approve", home=tmp_path, platform_os="linux").refused is None
+    )
+    names = ("mcp_servers.playwright.command", "mcp_servers.playwright.args")
+    assert agent_settings.ledger_summary("codex", home=tmp_path, settings=("mcp-playwright",)) == (
+        (mcp.path, names),
+    )
+    assert agent_settings.ledger_preview("codex", home=tmp_path, settings=("mcp-playwright",)) == (
+        (mcp.path, names, ()),
+    )
+    assert agent_settings.ledger_summary("codex", home=tmp_path) == (
+        (mcp.path, (*names, "approval_policy", "sandbox_mode")),
+    )
+    assert agent_settings.ledger_preview("codex", home=tmp_path) == (
+        (mcp.path, (*names, "approval_policy", "sandbox_mode"), ()),
+    )
+
+
+@pytest.mark.parametrize("wrapper", [None, "/chrome"])
+@pytest.mark.parametrize("change", ["intact", "args", "command-gone", "all-gone"])
+def test_ledger_preview_uses_the_grouped_codex_decision(
+    tmp_path: Path, wrapper: str | None, change: str
+) -> None:
+    result = _mcp_apply("codex", tmp_path, wrapper)
+    path = result.path
+    text = path.read_text(encoding="utf-8")
+    if change == "args":
+        text = text.replace("@playwright/mcp@0.0.85", "mine")
+    elif change == "command-gone":
+        text = (
+            "\n".join(line for line in text.splitlines() if not line.startswith("command =")) + "\n"
+        )
+    elif change == "all-gone":
+        text = "[mcp_servers.playwright]\n"
+    path.write_text(text, encoding="utf-8")
+    names = ("mcp_servers.playwright.command", "mcp_servers.playwright.args") + (
+        ("mcp_servers.playwright.env",) if wrapper else ()
+    )
+    present = (
+        names if change in ("intact", "args") else names[1:] if change == "command-gone" else ()
+    )
+    removes = present if change == "intact" else ()
+    kept = () if change == "intact" else present
+    assert agent_settings.ledger_preview("codex", home=tmp_path, settings=("mcp-playwright",)) == (
+        (path, removes, kept),
+    )
+    agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    doc = tomllib.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    for name in removes:
+        assert agent_settings.lookup(doc, tuple(name.split("."))) is agent_settings.ABSENT
+    for name in kept:
+        assert agent_settings.lookup(doc, tuple(name.split("."))) is not agent_settings.ABSENT
+
+
+def test_ledger_preview_skips_an_entry_the_revert_would_refuse(tmp_path: Path) -> None:
+    result = _mcp_apply("claude", tmp_path)
+    ordinary = apply_setting("claude", "auto-approve", home=tmp_path, platform_os="linux")
+    ledger = read_ledger("claude")
+    assert ledger is not None
+    forged = ConfigWrite("mcp-playwright", str(ordinary.path), ("mcpServers", "playwright"), {}, "")
+    write_ledger(ConfigLedger("claude", ledger.created_files, (*ledger.entries, forged)))
+    assert agent_settings.ledger_summary("claude", home=tmp_path, settings=("mcp-playwright",)) == (
+        (result.path, ("mcpServers.playwright",)),
+    )
+    assert agent_settings.ledger_preview("claude", home=tmp_path, settings=("mcp-playwright",)) == (
+        (result.path, ("mcpServers.playwright",), ()),
+    )
+    assert len(agent_settings.ledger_summary("claude", home=tmp_path)) == 2
+    assert agent_settings.ledger_preview("claude", home=tmp_path, settings=("auto-approve",))[0][
+        1
+    ] == ("permissions.defaultMode", "skipDangerousModePermissionPrompt")
+
+
+@pytest.mark.parametrize("agent", ["codex", "opencode"])
+def test_ledger_preview_applies_the_key_path_half_of_the_pair_rule(
+    agent: str, tmp_path: Path
+) -> None:
+    result = _mcp_apply(agent, tmp_path)
+    path = result.path
+    ordinary = agent_settings.setting_keys(agent, "auto-approve", "linux")[0]
+    mcp_path = (
+        ("mcp_servers", "playwright", "command")
+        if agent == "codex"
+        else ("mcp", "servers", "playwright")
+    )
+    text = path.read_text(encoding="utf-8")
+    text = insert_key(text, result.fmt, ordinary.path, ordinary.value).text
+    if agent == "codex":
+        text = text.replace('command = "bunx"', 'command = "mine"')
+    else:
+        text = text.replace('"bunx"', '"mine"')
+    path.write_text(text, encoding="utf-8")
+    ledger = read_ledger(agent)
+    assert ledger is not None
+    forged = (
+        ConfigWrite("mcp-playwright", str(path), ordinary.path, ordinary.value, ""),
+        ConfigWrite("auto-approve", str(path), mcp_path, "mine", ""),
+    )
+    write_ledger(ConfigLedger(agent, ledger.created_files, (*ledger.entries, *forged)))
+    genuine = tuple(".".join(e.key_path) for e in ledger.entries)
+    assert agent_settings.ledger_summary(agent, home=tmp_path) == ((path, genuine),)
+    preview = agent_settings.ledger_preview(agent, home=tmp_path)
+    assert preview == ((path, (), genuine),)
+    assert agent_settings.ledger_outside_home(agent, home=tmp_path) == ()
+    agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    agent_settings.revert_group(agent, "auto-approve", home=tmp_path, platform_os="linux")
+    doc = parse_settings(path.read_text(encoding="utf-8"), result.fmt)
+    assert agent_settings.lookup(doc, ordinary.path) == ordinary.value
+    assert agent_settings.lookup(doc, mcp_path) is not agent_settings.ABSENT
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex"])
+def test_ledger_preview_surfaces_a_malformed_file(agent: str, tmp_path: Path) -> None:
+    result = _mcp_apply(agent, tmp_path)
+    path = result.path
+    assert (
+        agent_settings.ledger_unreadable(agent, home=tmp_path, settings=("mcp-playwright",)) == ()
+    )
+    path.write_text("{broken" if agent == "claude" else "[broken", encoding="utf-8")
+    before = path.read_bytes()
+    ledger = read_ledger(agent)
+    assert ledger is not None
+    names = tuple(".".join(e.key_path) for e in ledger.entries)
+    assert agent_settings.ledger_preview(agent, home=tmp_path, settings=("mcp-playwright",)) == (
+        (path, (), ()),
+    )
+    (unreadable,) = agent_settings.ledger_unreadable(
+        agent, home=tmp_path, settings=("mcp-playwright",)
+    )
+    assert unreadable[:2] == (path, names)
+    assert ("JSON" if agent == "claude" else "TOML") in unreadable[2] and "line" in unreadable[2]
+    agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert path.read_bytes() == before and read_ledger(agent) == ledger
+    path.unlink()
+    assert (
+        agent_settings.ledger_unreadable(agent, home=tmp_path, settings=("mcp-playwright",)) == ()
+    )
+    assert agent_settings.ledger_preview(agent, home=tmp_path, settings=("mcp-playwright",)) == (
+        (path, names, ()),
+    )
+
+
+def test_ledger_outside_home_lists_the_external_files(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    external = tmp_path / "external"
+    environ = {"COPILOT_HOME": str(external)}
+    assert (
+        agent_settings.ledger_outside_home(
+            "copilot", home=home, settings=("mcp-playwright",), environ=environ
+        )
+        == ()
+    )
+    result = agent_settings.apply_mcp_server(
+        "copilot",
+        command="bunx",
+        spec="pkg",
+        executable_path=None,
+        home=home,
+        platform_os="linux",
+        environ=environ,
+    )
+    ledger = read_ledger("copilot")
+    assert ledger is not None
+    forged = ConfigWrite(
+        "mcp-playwright", str(external / "settings.json"), ("mcpServers", "playwright"), {}, ""
+    )
+    inside = ConfigWrite(
+        "mcp-playwright", str(home / "other.json"), ("mcpServers", "playwright"), {}, ""
+    )
+    write_ledger(ConfigLedger("copilot", ledger.created_files, (*ledger.entries, forged, inside)))
+    assert agent_settings.ledger_outside_home(
+        "copilot", home=home, settings=("mcp-playwright",), environ=environ
+    ) == (result.path,)
+    assert (
+        agent_settings.ledger_summary(
+            "copilot", home=home, settings=("mcp-playwright",), environ=environ
+        )
+        == ()
+    )
+    assert (
+        agent_settings.ledger_preview(
+            "copilot", home=home, settings=("mcp-playwright",), environ=environ
+        )
+        == ()
+    )
+    inside_path = home / ".copilot" / "mcp-config.json"
+    valid_inside = ConfigWrite(
+        "mcp-playwright", str(inside_path), ("mcpServers", "playwright"), {}, ""
+    )
+    write_ledger(ConfigLedger("copilot", entries=(valid_inside,)))
+    assert (
+        agent_settings.ledger_outside_home("copilot", home=home, settings=("mcp-playwright",)) == ()
+    )
+    assert agent_settings.ledger_summary("copilot", home=home, settings=("mcp-playwright",)) == (
+        (inside_path, ("mcpServers.playwright",)),
+    )
+
+
 def test_held_states_applies_the_unit_rule() -> None:
     entries = (
         ConfigWrite("mcp-playwright", "f", ("mcp_servers", "playwright", "command"), "x", ""),

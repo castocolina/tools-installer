@@ -13,8 +13,9 @@ import copy
 import json
 import os
 import re
+import sys
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, Literal, cast
@@ -1319,6 +1320,37 @@ def _recorded_files(ledger: ConfigLedger, setting: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(e.file for e in ledger.entries if e.setting == setting))
 
 
+def _base_table(agent: str, setting: str, platform_os: str) -> dict[KeyPath, SettingKey]:
+    keys = (*setting_keys(agent, setting, platform_os), *RETIRED_KEYS.get((agent, setting), ()))
+    return {key.path: key for key in keys}
+
+
+def _eligible(
+    agent: str,
+    setting: str,
+    entries: tuple[ConfigWrite, ...],
+    file: str,
+    table: dict[KeyPath, SettingKey],
+) -> tuple[tuple[ConfigWrite, ...], dict[KeyPath, SettingKey]]:
+    if (agent, setting) in DYNAMIC_KEYS:
+        table = {
+            entry.key_path: SettingKey(entry.key_path, entry.value)
+            for entry in entries
+            if entry.setting == setting
+            and entry.file == file
+            and entry.key_path in DYNAMIC_KEYS[(agent, setting)]
+        }
+    mine = tuple(
+        entry
+        for entry in entries
+        if entry.setting == setting
+        and entry.file == file
+        and entry.key_path in table
+        and same_value(entry.value, table[entry.key_path].value)
+    )
+    return mine, table
+
+
 def _revert_once(
     agent: str,
     setting: str,
@@ -1333,23 +1365,7 @@ def _revert_once(
         ledger = _ledger(agent)
     except LedgerUntrusted as exc:
         return FileResult(agent, setting, path, fmt, refused=str(exc))
-    if (agent, setting) in DYNAMIC_KEYS:
-        # The ledger is user-writable JSON: only the allow-listed key paths enter the table.
-        table = {
-            entry.key_path: SettingKey(entry.key_path, entry.value)
-            for entry in ledger.entries
-            if entry.setting == setting
-            and entry.file == file
-            and entry.key_path in DYNAMIC_KEYS[(agent, setting)]
-        }
-    mine = tuple(
-        entry
-        for entry in ledger.entries
-        if entry.setting == setting
-        and entry.file == file
-        and entry.key_path in table
-        and same_value(entry.value, table[entry.key_path].value)
-    )
+    mine, table = _eligible(agent, setting, ledger.entries, file, table)
     if not mine:
         return FileResult(agent, setting, path, fmt)
     dirs = ledger.created_dirs
@@ -1429,8 +1445,7 @@ def _revert_file(
         agent, home=home, platform_os=platform_os, environ=environ, setting=setting
     ):
         return FileResult(agent, setting, Path(file), fmt, refused=NOT_A_SETTINGS_FILE)
-    keys = (*setting_keys(agent, setting, platform_os), *RETIRED_KEYS.get((agent, setting), ()))
-    table = {key.path: key for key in keys}
+    table = _base_table(agent, setting, platform_os)
     for _attempt in range(2):
         try:
             return _revert_once(agent, setting, Path(file), fmt, table, home)
@@ -1615,39 +1630,139 @@ def revert_agent(
     )
 
 
-def ledger_summary(agent: str, *, home: Path) -> tuple[tuple[Path, tuple[str, ...]], ...]:
-    """Per settings file under home, the dotted keys the ledger records there (removal previews).
-    Accepted limit: a file outside home (an absolute COPILOT_HOME) is reverted but never listed."""
-    ledger = read_ledger(agent) or ConfigLedger(agent)
-    keys_by_file: dict[str, list[str]] = {}
-    for entry in ledger.entries:
-        if Path(entry.file).is_relative_to(home):
-            keys_by_file.setdefault(entry.file, []).append(".".join(entry.key_path))
-    return tuple((Path(file), tuple(keys)) for file, keys in keys_by_file.items())
+def _preview_os() -> str:
+    # agent_env.adapters differs by OS only for VS Code.
+    return "macos" if sys.platform == "darwin" else "linux"
+
+
+def _previewable(
+    agent: str,
+    ledger: ConfigLedger,
+    *,
+    home: Path,
+    settings: Collection[str] | None,
+    environ: Mapping[str, str] | None,
+) -> tuple[ConfigWrite, ...]:
+    platform_os = _preview_os()
+    eligible: list[ConfigWrite] = []
+    for setting, file in dict.fromkeys((e.setting, e.file) for e in ledger.entries):
+        if settings is not None and setting not in settings:
+            continue
+        if setting == MCP_SETTING and agent not in MCP_AGENTS:
+            continue
+        if file not in _agent_files(
+            agent, home=home, platform_os=platform_os, environ=environ, setting=setting
+        ):
+            continue
+        mine, _ = _eligible(
+            agent, setting, ledger.entries, file, _base_table(agent, setting, platform_os)
+        )
+        eligible.extend(mine)
+    return tuple(entry for entry in ledger.entries if entry in eligible)
+
+
+def _preview_files(
+    agent: str,
+    *,
+    home: Path,
+    settings: Collection[str] | None,
+    environ: Mapping[str, str] | None,
+) -> dict[Path, list[ConfigWrite]]:
+    files: dict[Path, list[ConfigWrite]] = {}
+    for entry in _previewable(
+        agent,
+        read_ledger(agent) or ConfigLedger(agent),
+        home=home,
+        settings=settings,
+        environ=environ,
+    ):
+        files.setdefault(Path(entry.file), []).append(entry)
+    return files
+
+
+def ledger_summary(
+    agent: str,
+    *,
+    home: Path,
+    settings: Collection[str] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[tuple[Path, tuple[str, ...]], ...]:
+    """Recorded keys under home; outside-home files are reported by ledger_outside_home."""
+    return tuple(
+        (path, tuple(".".join(e.key_path) for e in entries))
+        for path, entries in _preview_files(
+            agent, home=home, settings=settings, environ=environ
+        ).items()
+        if path.is_relative_to(home)
+    )
 
 
 def ledger_preview(
-    agent: str, *, home: Path
+    agent: str,
+    *,
+    home: Path,
+    settings: Collection[str] | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> tuple[tuple[Path, tuple[str, ...], tuple[str, ...]], ...]:
-    """Per ledgered file under home: (path, keys a revert removes, keys the user changed since).
-    A key that is gone is in neither. A missing or unreadable file lists every key as removed;
-    the revert itself then reports why it cannot (removal previews)."""
+    """Per eligible file under home, keys removed and keys kept by the revert."""
     fmt = _format(agent)
     preview: list[tuple[Path, tuple[str, ...], tuple[str, ...]]] = []
-    for path, names in ledger_summary(agent, home=home):
-        entries = [
-            e for e in (read_ledger(agent) or ConfigLedger(agent)).entries if e.file == str(path)
-        ]
+    for path, entries in _preview_files(
+        agent, home=home, settings=settings, environ=environ
+    ).items():
+        if not path.is_relative_to(home):
+            continue
+        names = tuple(".".join(e.key_path) for e in entries)
         try:
             snap = read_settings(path)
-            doc = None if snap is None else parse_settings(_text_of(snap, fmt), fmt)
+            if snap is None:
+                preview.append((path, names, ()))
+                continue
+            doc = parse_settings(_text_of(snap, fmt), fmt)
         except (SettingsParseError, OSError):
-            doc = None
-        if doc is None:
-            preview.append((path, names, ()))
+            preview.append((path, (), ()))
             continue
-        held = [key_held(lookup(doc, e.key_path), e.value) for e in entries]
-        removes = tuple(n for n, h in zip(names, held, strict=True) if h)
+        held = held_states(entries, doc)
+        removes = tuple(n for n, h in zip(names, held, strict=True) if h is True)
         kept = tuple(n for n, h in zip(names, held, strict=True) if h is False)
         preview.append((path, removes, kept))
     return tuple(preview)
+
+
+def ledger_unreadable(
+    agent: str,
+    *,
+    home: Path,
+    settings: Collection[str] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[tuple[Path, tuple[str, ...], str], ...]:
+    """Eligible existing files under home that the revert cannot read."""
+    result: list[tuple[Path, tuple[str, ...], str]] = []
+    fmt = _format(agent)
+    for path, entries in _preview_files(
+        agent, home=home, settings=settings, environ=environ
+    ).items():
+        if not path.is_relative_to(home):
+            continue
+        try:
+            snap = read_settings(path)
+            if snap is not None:
+                parse_settings(_text_of(snap, fmt), fmt)
+        except (SettingsParseError, OSError) as exc:
+            result.append((path, tuple(".".join(e.key_path) for e in entries), str(exc)))
+    return tuple(result)
+
+
+def ledger_outside_home(
+    agent: str,
+    *,
+    home: Path,
+    settings: Collection[str] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[Path, ...]:
+    """Eligible files outside home, in ledger order."""
+    return tuple(
+        path
+        for path in _preview_files(agent, home=home, settings=settings, environ=environ)
+        if not path.is_relative_to(home)
+    )
