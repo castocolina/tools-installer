@@ -180,3 +180,164 @@ Evidence below uses **`P`** for `.planning/phases/32-onboard-xcode-clt-aws-cli-b
 ### Status: Issues Found — fix and re-invoke
 
 No code, plans, or repository files were changed. No tests or real container runs were performed, and no scratch directory was created. Real macOS, Bazzite, vendor, and agent-host behavior remains unverified.
+
+
+## Lane Log (convergence cycle 2, plans at 300cd399)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 07:19 | opencode-referee-one | one-shot probe | OK |
+| 07:19 to 07:22 | opencode-referee-one | real review through `gsd-tools query review-lane invoke`, background, 2700 s timeout, stdin `/dev/null`, prior findings supplied | exit 0, stderr empty |
+
+Failures this cycle: none. No other lane or model was used.
+
+## Orchestrator verification of the cycle 2 concerns
+
+Cycle 2 of 3. Real HIGH by cycle: 10, now 9 distinct (three of the reported 13 are duplicates across plans); they are second-order (gaps in the first-round fixes). Plan-internal findings were checked against the cited lines; code facts are for the planner to verify. DECISIONS apply exactly; all provisional.
+
+| Id | Claim | Judgment and DECISION |
+|---|---|---|
+| H1 (32-01, 32-02) | Closing stdin does not stop a child from opening `/dev/tty`; the streaming and captured runners use a new session for that, the console route keeps the terminal session | Real by the referee's reading (`installer/run.py:103-119,335-350`; planner verifies). Run the fixed-argv install, update and remove children in a new session on the console route too (as the other runners do) and test with a child that tries to open `/dev/tty` through the production runner. |
+| H2 (32-01) | The validator checks only the first argv token, so `["env","xcode-select","--install"]` or `["env","sh","-c",...]` pass | Real. Refuse a registry `install`, `update` or `remove` argv when ANY token's basename is an elevation command, a shell, `xcode-select`, or a launcher (`env`, `exec`, `command`, `nohup`, `nice`, `time`, `timeout`, `xargs`); test each position at registry load; the Python AST guard stays as the second line. |
+| L1 (32-02) | "manifest-only" is stronger than the detector guarantees (`gh-stack-extension` on PATH is still checked first) | Describe the probe-name limit accurately in the plan and the `# Verified` comment; add a test with an executable named like the probe. |
+| M1 (32-03) | The no-brew test expects `RowOutcome.detail` to contain `gpg not found`, but a failed install leaves that field empty (errors live in `outcome.install.errors`) and `run_command` does not capture the vendor stderr | Real by the referee's reading (`installer/session.py:589-601`; planner verifies). Specify how the diagnostic reaches the user on the real runner and test the public outcome and the rendered message; if the vendor message is only streamed, assert what the outcome does carry (the failing command and exit status) and state the limit. |
+| H3 (32-04) | The MCP file is ADDED to the ordinary settings-file allow-list, so a forged MCP ledger entry can target the same agent's ordinary settings file | Real (32-04:173-174 vs :214-217; `installer/agent_settings.py:1169-1184,1232-1253`). Allow-list (file, key path) PAIRS: an MCP setting may only revert in the MCP file and an ordinary setting only in its ordinary file; test a forged MCP entry aimed at the ordinary settings file and the reverse. |
+| M2 (32-04) | Codex's ownership unit is undefined for the two-key case (no env) and when env is added later | Define and test grouped equality and rollback for the two-key and three-key registrations, and for env added later by the user. |
+| H4 (32-05, 32-08) | The consent step is disclosed for the hosts pending at planning time but `register_hooks(..., confirmed=True)` re-reads the present hosts at execution, so a Claude host appearing between planning and execution is written without disclosure | Real by the plan lines and the referee's reading (`installer/session.py:331-341`, `installer/postinstall.py:663-666`). Bind execution to the hosts disclosed in the confirmed step (a `confirmed_hosts` set); a host that appears later is not written and is reported pending; test a host appearing between plan and execution in the public flow (32-05) and in the container driver's seeding (32-08). |
+| H5 (32-05) | The Flatpak Chrome export is gated only by the wrapper file's existence, not Bazzite | Real (SPEC: "on Bazzite only"). Gate on the platform facts (`installer/platform.py`: immutable Fedora family) AND the wrapper file; test a non-Bazzite host with the wrapper present. |
+| M3 (32-05) | The preview evaluates Codex keys individually while revert groups them | The preview shares the revert's grouped decision and allowed-file set. |
+| M4 (32-05) | The preview excludes files outside home (external `COPILOT_HOME`) | Name the limit in the preview text (a line saying an external Copilot home is reverted but not listed) and test it. |
+| M5 (32-05) | The `claude mcp add` hand-off interpolates the absolute `bunx` path unquoted | Quote every dynamic argument with `shlex.quote`; test a path with a space. |
+| H6 (32-06) | The no-gpg verdict receives only an exit code and output, so a script that leaves artifacts before printing `gpg not found` still earns `TRACER_AWS_NOGPG_OK` | Real. Feed the no-gpg container's install-path evidence (a listing of the declared install paths and `~/.local/bin` after the run) into the verdict: anything created fails it; test a script that leaves a file. |
+| M6 (32-06, 32-09) | The gate requires the teardown line to START WITH the marker and be the last non-empty line, while 32-09 promises the marker as the last line (the model gate checks exact equality) | Exact line equality for the teardown marker with one consistent trailing-blank rule, in the shared gate and in 32-09's text. |
+| M7 (32-06) | Task 2 says to run `make shellcheck` by hand | Remove it; the commit hook runs the static gates (run one by hand only to diagnose a failure). |
+| H7 (32-07, 32-09) | A proven `extract-no-sandbox` mode needs `APPIMAGE_EXTRACT_AND_RUN=1` but `smoke_argv_for` propagates only argv, while the shipped smoke carries only display variables and TMPDIR, so the applied smoke differs from the proven invocation | Real (`installer/executors.py:86-110`). Apply a recorded mode to the entry only when the shipped smoke reproduces it (argv-only modes); a mode that needs environment variables the shipped smoke cannot carry is NOT applied: keep the default and state the limit in `# Verified`; test both branches. |
+| H8 (32-09) | A summary line that is literally `PASS` but whose transcript fails verification can still become proof wording because 32-09 branches on the copied line | Real (32-07:115,122 vs 32-09:25-26,116,125-127). Branch only on the VERIFIED result of `recorded_smoke_mode`; an unverifiable record produces no proof wording; test a PASS line with an altered transcript. |
+| X (cross) | Final gates with the default TMPDIR instead of an owned directory | REJECTED again, no plan change beyond keeping the ruling in the 32-01 ledger: the doctor test `tests/test_doctor.py::test_run_doctor_reports_broken_links_and_changes_nothing` wraps its output by path length and failed under executor-owned TMPDIRs in phase 30; every scratch directory the plans create is owned and trapped. |
+
+## OpenCode Review (opencode-referee-one), cycle 2
+
+Using the plan-review checklist to review the current files against the source and the previous cycle’s findings.
+Using parallel reviewers for the lifecycle, MCP, and container plans; I’ll independently check the cross-plan evidence and reported findings.
+**HIGH — Bazzite-only export is not enforced.** `32-05-PLAN.md:160-161` selects the Flatpak Chrome wrapper solely by file existence; `installer/platform.py:19-24` distinguishes platform and immutability, but the plan does not use those facts. A non-Bazzite host with that wrapper would receive the export.
+### Document Type
+
+GSD · implementation plans
+
+### Overall verdict
+
+**Issues found — revise and re-review before execution.** The revised plans address several first-cycle findings, including stdin inheritance, the AWS dependency block, settings-write races, container teardown, and evidence ordering. They still leave gaps in terminal prompting, consent binding, ledger safety, and container-proof propagation.
+
+Plan references below use **`P`** for `.planning/phases/32-onboard-xcode-clt-aws-cli-bruno-gh-stack-and-playwright-mcp`.
+
+## 32-01
+
+1. **Summary:** Adds fixed-argv script installs, closed hand-off names, and script-before-brew preference.
+2. **Findings status:** The prior stdin and direct-head validation findings are addressed in the plan, but the revisions do not cover all routes.
+3. **Strengths:** The hand-off is unconditional and direct execution is refused (`P/32-01-PLAN.md:177-190`). The preference preserves the existing kind ladder (`installer/resolve.py:15-31,96-99`).
+4. **Concerns:**
+   - **HIGH — `/dev/tty` can still prompt.** The plan closes stdin but explicitly keeps the console child in the terminal session (`P/32-01-PLAN.md:136-146`). The existing streaming and captured runners use a new session specifically to prevent reads from the controlling terminal (`installer/run.py:103-119,335-350`). A child can open `/dev/tty` independently of stdin, so the proposed EOF test does not prove the non-prompt guarantee.
+   - **HIGH — forbidden commands can pass through a launcher.** The proposed validator checks only the first argv token (`P/32-01-PLAN.md:132-145`). The existing token validator permits `["env", "xcode-select", "--install"]` and `["env", "sh", "-c", "xcode-select"]` (`installer/model.py:482-490,543-559`), and the planned executor passes the list unchanged.
+5. **Suggestions:** Isolate console children from the controlling terminal and test `/dev/tty` through the production runner. Enforce the command prohibition for indirect launchers, with registry-load tests for install, update, and remove.
+6. **Risk Assessment:** **High:** a fixed-argv child can still prompt or reach a prohibited command.
+
+## 32-02
+
+1. **Summary:** Adds detect-only Xcode CLT and the gh-stack extension.
+2. **Findings status:** The earlier unrelated-`gh-stack` PATH false positive is addressed by a distinct probe name; the non-prompt issue remains dependent on 32-01.
+3. **Strengths:** Tests cover the exact extension argv, manifest detection, idempotency, and receipt-scoped removal (`P/32-02-PLAN.md:163-168`).
+4. **Concerns:**
+   - **HIGH — non-prompt behavior inherits 32-01’s console-runner gap.** Install and update use real runner routes (`P/32-02-PLAN.md:163-167`); closing stdin alone does not prevent `/dev/tty` reads (`installer/run.py:78-85,103-119`).
+   - **LOW — “manifest-only” is stronger than the detector guarantees.** The alternate probe avoids an executable named `gh-stack`, but `is_installed` still checks the declared `gh-stack-extension` name on PATH first (`P/32-02-PLAN.md:28,163-164`; `installer/status.py:168-184`).
+5. **Suggestions:** Inherit the runner fix and either describe the probe-name limitation accurately or test an executable with the declared probe name.
+6. **Risk Assessment:** **High** until the runner is non-interactive; the remaining detection risk is narrower.
+
+## 32-03
+
+1. **Summary:** Adds script-first AWS CLI with brew fallback and pinned Bruno AppImages plus cask.
+2. **Findings status:** The earlier tool-level `unzip` dependency block is addressed with a public plan-and-execution regression test (`P/32-03-PLAN.md:123-128`).
+3. **Strengths:** The plan tests fallback through the public flow and keeps credentials outside declared removal paths (`P/32-03-PLAN.md:123-129`).
+4. **Concerns:**
+   - **MEDIUM — the specified failure-detail assertion does not match the public flow.** The no-brew test requires `RowOutcome.detail` to contain `gpg not found` (`P/32-03-PLAN.md:127-128`), but ordinary failed installs leave that field empty and retain errors in `outcome.install.errors` (`installer/session.py:589-601`). `run_command` also does not capture the vendor’s stderr in `CommandError` (`installer/run.py:78-85`).
+5. **Suggestions:** Specify how the vendor diagnostic reaches the user on the actual runner and test the resulting public outcome and rendered message, rather than asserting an unpopulated field.
+6. **Risk Assessment:** **Medium:** the failure test cannot establish the promised user-facing diagnostic as written.
+
+## 32-04
+
+1. **Summary:** Extends the settings ledger for merge-safe MCP writes and reverts.
+2. **Findings status:** The first-cycle ancestor-provenance, in-snapshot presence check, and Codex grouped-revert concerns have explicit revisions and regression cases.
+3. **Strengths:** The new presence gate is specified inside the write snapshot and on retry (`P/32-04-PLAN.md:163,175-176`); the current writer already reserves the ledger before a guarded write and rolls it back on a detected race (`installer/agent_settings.py:935-1002`).
+4. **Concerns:**
+   - **HIGH — the MCP revert allow-list is broader than claimed.** The plan *adds* the MCP file to the ordinary settings-file allow-list (`P/32-04-PLAN.md:173-174`) while claiming a forged ledger cannot redirect a revert (`:214-217`). `_revert_file` accepts any path in that list, and dynamic ledger entries supply values for allowed key paths (`installer/agent_settings.py:1169-1184,1232-1253`). A forged MCP ledger entry can therefore target the same agent’s ordinary settings file.
+   - **MEDIUM — Codex’s two-key ownership unit is undefined.** The normal no-wrapper case omits `env`, but equality and rollback repeatedly describe three recorded keys (`P/32-04-PLAN.md:157-158,166,173,176,178`). The tests do not define what happens when `env` is absent initially or added later.
+5. **Suggestions:** Allow only the intended MCP file or files for the MCP setting, and test a forged entry targeting the ordinary settings file. Define and test grouped equality and rollback for both two-key and three-key Codex registrations.
+6. **Risk Assessment:** **High:** a user-writable ledger can direct a revert into an unintended file under the proposed allow-list.
+
+## 32-05
+
+1. **Summary:** Wires Playwright registration, Claude consent, drift reporting, and removal.
+2. **Findings status:** The revised plan discloses Claude’s files, requires an executable absolute `bunx`, adds removal preview, and supplies an initial-install hand-off. The initial install still deliberately defers the consent step to reconfiguration.
+3. **Strengths:** The existing `run_wizard` confirmation occurs after plan rendering and before execution (`installer/app.py:146-180`); the plan tests both decline and `--yes` (`P/32-05-PLAN.md:189-192`).
+4. **Concerns:**
+   - **HIGH — a newly appearing Claude host can be written without disclosure.** The disclosure is added only when Claude is pending during planning (`P/32-05-PLAN.md:192,201-202`), but the confirmed step calls `register_hooks` without restricting hosts; it re-reads present hosts at execution (`installer/session.py:331-341`; `installer/postinstall.py:663-666`). If Claude appears after rendering, a step disclosed only for another host can write Claude’s files.
+   - **HIGH — the Flatpak export is not Bazzite-only.** The hook checks only whether the wrapper file exists (`P/32-05-PLAN.md:160-161`), despite the roadmap’s Bazzite-only criterion. Platform information exists but is not consulted (`installer/platform.py:19-24,65-76`).
+   - **MEDIUM — preview can disagree with grouped Codex revert.** The plan adds a setting filter to the existing per-key preview (`P/32-05-PLAN.md:193-195,203-204`); that preview evaluates keys individually (`installer/agent_settings.py:1404-1427`). If one Codex key changes, it can say the others will be removed although 32-04’s grouped rule keeps the whole server.
+   - **MEDIUM — preview omits external `COPILOT_HOME`.** The plan supports and reverts an absolute external Copilot home (`P/32-04-PLAN.md:66,174`), but the existing preview deliberately excludes files outside home (`installer/agent_settings.py:1393-1401`); filtering alone does not change that.
+   - **MEDIUM — the hand-off command does not quote dynamic paths.** The command interpolates the absolute `bunx` path directly (`P/32-05-PLAN.md:147,161-162`); `resolve_bun` can derive it from environment paths containing spaces or shell characters (`installer/bun_globals.py:20-25,43-56`).
+5. **Suggestions:** Bind execution of consent hosts to the hosts disclosed in the confirmed plan; test a host appearing between planning and execution. Gate the wrapper by the required host condition. Make preview share revert’s grouped decision and allowed-file set, and shell-quote hand-off arguments.
+6. **Risk Assessment:** **High:** consent can be applied to an undisclosed write, and the wrapper can affect hosts outside the stated scope.
+
+## 32-06
+
+1. **Summary:** Adds AWS lifecycle and no-gpg container evidence, plus a shared transcript gate.
+2. **Findings status:** The prior errexit cleanup, second-container verification, and verdict-order findings have concrete proposed fixes and tests (`P/32-06-PLAN.md:125-127,166-167,177-180`).
+3. **Strengths:** The revised trap tests use a real Bash process and a negative control; the existing teardown verifies its own container by listing it (`scripts/container-e2e-verify.sh:2837-2854`).
+4. **Concerns:**
+   - **HIGH — the no-gpg verdict does not prove “nothing installed.”** It receives only an exit code and output, rejecting an installation only if the output says so (`P/32-06-PLAN.md:27,124,128,180`). A script that silently leaves artifacts before reporting `gpg not found` can still earn `TRACER_AWS_NOGPG_OK`.
+   - **MEDIUM — teardown matching is weaker than the final gate’s contract.** Plan 06 requires a line that *starts with* the marker and is the last *non-empty* line (`P/32-06-PLAN.md:134`), while plan 09 promises the marker as the last line (`P/32-09-PLAN.md:24`). The existing gate model checks exact equality (`tests/e2e_herdr_app_driver.py:287-298`).
+   - **MEDIUM — Task 2 instructs a prohibited per-commit static gate.** It directs `make shellcheck` (`P/32-06-PLAN.md:180`) despite its own no-manual-static-gate rule (`:79-80`) and `AGENTS.md`’s hook-first rule.
+5. **Suggestions:** Inspect the no-gpg container’s install paths and feed that evidence into the verdict. Require an exact teardown line with consistent trailing-blank semantics. Let the hook run shellcheck unless diagnosing a failure.
+6. **Risk Assessment:** **High:** the final evidence gate can accept an unproven no-install claim.
+
+## 32-07
+
+1. **Summary:** Adds a Bruno AppImage container check and reports PASS or UNPROVEN.
+2. **Findings status:** The prior staging omission is addressed. The prior smoke-propagation finding is only partially addressed.
+3. **Strengths:** UNPROVEN remains distinct from PASS, and later staging includes the earlier skip-list test (`P/32-07-PLAN.md:109-116,141,154,161`).
+4. **Concerns:**
+   - **HIGH — a proven extract mode is not the shipped smoke invocation.** Both extract modes require `APPIMAGE_EXTRACT_AND_RUN=1`, but `smoke_argv_for` propagates only argv (`P/32-07-PLAN.md:112,115-116`). The production smoke inherits the ambient environment and changes only display variables and `TMPDIR` (`installer/executors.py:86-110`). Thus even `extract-no-sandbox` can produce a digest-bound PASS while the shipped invocation lacks the environment that made it work.
+5. **Suggestions:** Reproduce both the recorded arguments and environment in the shipped smoke, or treat extract-dependent results as insufficient to select a working shipped smoke.
+6. **Risk Assessment:** **High:** the recorded result can be applied as though it proves a different runtime invocation.
+
+## 32-08
+
+1. **Summary:** Adds Playwright MCP container registration and JSON-RPC launch checks.
+2. **Findings status:** The prior skip-list staging and inherited verdict-order findings are addressed in the plan (`P/32-08-PLAN.md:123,150,163,170`).
+3. **Strengths:** The driver starts the command read from the registered entry, uses bounded process-group cleanup, and distinguishes UNPROVEN from PASS (`P/32-08-PLAN.md:67-68,119-123`).
+4. **Concerns:**
+   - **HIGH — the container proof does not close the late-host consent gap.** It calls `register_hooks(..., confirmed=True)` after seeding all hosts (`P/32-08-PLAN.md:67,130`), so it cannot exercise a Claude host appearing after a differently disclosed plan was confirmed. The execution-time host read is in `installer/postinstall.py:663-666`.
+   - **MEDIUM — final evidence inherits the teardown-marker mismatch in 32-06.** The driver delegates to the shared gate (`P/32-08-PLAN.md:123,130`), whose specified marker check is weaker than 32-09’s promise.
+5. **Suggestions:** Add the late-host regression to the public consent flow in 32-05; make the shared marker contract exact before relying on it here.
+6. **Risk Assessment:** **High** for the consent boundary; otherwise the container check is appropriately bounded.
+
+## 32-09
+
+1. **Summary:** Gates publication of AWS and Playwright evidence, reports Bruno’s result, and adds consistency guards.
+2. **Findings status:** The previous test-first ordering and prior skip-list staging issues are addressed; the strengthened count-and-order gate is inherited from 32-06.
+3. **Strengths:** Both required evidence gates run before edits, with negative date and digest samples (`P/32-09-PLAN.md:123-126`).
+4. **Concerns:**
+   - **HIGH — an unverifiable Bruno PASS can become a published proof claim.** `recorded_smoke_mode` returns no mode for an altered or unverifiable transcript (`P/32-07-PLAN.md:115,122`), but 32-09 also branches on the copied summary’s literal `PASS` and requires successful verdicts and a mode in the paragraph (`P/32-09-PLAN.md:25-26,116,125-127`). These instructions conflict and can promote an unverified line into a claim.
+   - **HIGH — extract-mode smoke data remains incomplete.** Applying argv to both architectures (`P/32-09-PLAN.md:26,117,127`) does not carry the environment required by the recorded mode, as described in 32-07.
+5. **Suggestions:** Distinguish a raw summary line from a verified Bruno PASS; an unverifiable record must not produce proof wording. Apply a smoke configuration only when the shipped invocation reproduces the verified mode.
+6. **Risk Assessment:** **High:** registry evidence can overstate what the verified run proves.
+
+## Cross-plan assessment
+
+- **Waves:** The declared dependencies are sequential, so the repeated edits to `installer/registry.toml`, the container script, and test pins are not scheduled concurrently (`P/32-01-PLAN.md:6-7` through `P/32-09-PLAN.md:6-7`).
+- **Scratch cleanup — unresolved from cycle 1:** Every plan directs final `make validate` and `make test` runs to use the default `TMPDIR`, for example `P/32-01-PLAN.md:85`. That conflicts with the mandatory host instruction to use an owned, trapped run directory for every test run. The stated long-path issue does not establish that a **short** owned directory cannot work. This instruction takes precedence over the plans’ rejection of the earlier finding.
+- **Execution size:** Measuring the specified executor-visible sections puts each plan below approximately 55 KB; 32-05 has three tasks (`P/32-05-PLAN.md:29-32`), rather than two, but remains below that size threshold.
+- **Decisions:** This review evaluates the provisional decisions as requested; it does not ask to reopen them.
+
+### Status: Issues Found — fix and re-invoke
+
+No repository files were changed. No tests, container runs, real host installations, or macOS checks were performed. Graph coverage was best-effort; the new drivers and implementation do not yet exist to verify. No scratch directory was created.
