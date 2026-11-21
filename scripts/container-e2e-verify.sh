@@ -19,6 +19,8 @@ set -euo pipefail
 IMAGE_FEDORA=fedora:latest
 IMAGE_DEBIAN=docker.io/library/debian:trixie
 IMAGE_ARCH=docker.io/library/archlinux:latest
+# Extra container run arguments for Ghostty's FUSE device; empty for other targets.
+CONTAINER_RUN_ARGS=()
 
 # A tool whose first method on Fedora with Homebrew is a raw download (category terminal;
 # the box has Homebrew, so a brew-first tool leaves no receipt). A constant, never input.
@@ -139,6 +141,22 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           .e2e-artifacts/container-herdr-keys/herdr-keys-transcript.log with
                           TRACER_LANDING_TEARDOWN_OK once the container is removed (and its image
                           only when this run pulled it).
+  ghostty [--keep-image]
+                          Orchestrator only: a disposable Fedora container named
+                          tools-installer-e2e-ghostty-<pid>, with zsh, fuse, fuse3,
+                          /run/ostree-booted and /dev/fuse when available (never privileged).
+                          Bootstrapped like audit-landing, the installer's own code installs
+                          the pinned Ghostty AppImage, syncs zsh, reads both regions with real
+                          Ghostty and uninstalls it (tests/e2e_ghostty_driver.py), once with
+                          FUSE and once with APPIMAGE_EXTRACT_AND_RUN=1. Prints
+                          TRACER_GHOSTTY_INSTALL_OK, TRACER_GHOSTTY_FUSE_OK, _SYNC_OK,
+                          _REGIONS_OK and _REMOVE_OK per pass, or a named _FAILED line.
+                          TRACER_GHOSTTY_FUSE_UNPROVEN means no FUSE mount was observed,
+                          including fallback, failed version or missing /dev/fuse; never a pass.
+                          TRACER_LANDING_INFEASIBLE step=... indicates an environment failure
+                          (exit 2). The transcript .e2e-artifacts/container-ghostty/
+                          ghostty-transcript.log ends with TRACER_LANDING_TEARDOWN_OK after
+                          removing the container and the image only when this run pulled it.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -216,7 +234,7 @@ start_container() {
   fi
   # --init gives the container a reaping PID 1: `sleep` never waits, so a detached daemon the
   # installer stops (opencode's service) would stay a zombie that kill(pid, 0) still finds.
-  ct run -d --init --name "$CONTAINER_NAME" "$IMAGE" sleep infinity >/dev/null
+  ct run -d --init ${CONTAINER_RUN_ARGS[@]+"${CONTAINER_RUN_ARGS[@]}"} --name "$CONTAINER_NAME" "$IMAGE" sleep infinity >/dev/null
 }
 
 distro_release_record() {
@@ -2936,6 +2954,56 @@ cmd_herdr_keys() {
   return "$failed"
 }
 
+# --- ghostty target (30-05, NTERM-01): orchestrator only ---
+# A landing box with the Ghostty driver and its own PID-named container.
+# fedora:latest is the shared landing image (Fedora 44 today), pulled once for landing targets.
+# The box is Bazzite-like with zsh, fuse, fuse3 and /run/ostree-booted; it gets /dev/fuse
+# when available, without elevated privileges. Nothing is written to host config.
+# The host device checked before passing FUSE; host tests point this at a scratch path.
+GHOSTTY_HOST_FUSE=/dev/fuse
+
+ghostty_run_args() {
+  CONTAINER_RUN_ARGS=(--security-opt label=disable)
+  if [[ -e "$1" ]]; then
+    CONTAINER_RUN_ARGS+=(--device /dev/fuse)
+  else
+    printf 'ghostty: %s is absent on this host; the container starts without the FUSE device and the FUSE pass will read TRACER_GHOSTTY_FUSE_UNPROVEN (the extract-and-run pass still runs)\n' "$1" >&2
+  fi
+}
+
+ghostty_root_setup() {
+  exec_root dnf install -y zsh fuse fuse3
+  exec_root sh -c 'touch /run/ostree-booted'
+}
+
+cmd_ghostty() {
+  local failed=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-image) LANDING_KEEP_IMAGE=1 ;;
+      *) die "unknown ghostty option: $1" ;;
+    esac
+    shift
+  done
+  LANDING_CONTAINER_NAME="tools-installer-e2e-ghostty-$$"
+  CONTAINER_NAME="$LANDING_CONTAINER_NAME"
+  IMAGE="$LANDING_IMAGE"
+  DISTRO=fedora
+  LANDING_DRIVER_MODULE=tests.e2e_ghostty_driver
+  ghostty_run_args "$GHOSTTY_HOST_FUSE"
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-ghostty"
+  LANDING_TRANSCRIPT="$PHASE_DIR/ghostty-transcript.log"
+  trap landing_teardown EXIT
+  ensure_phase_dir
+  : >"$LANDING_TRANSCRIPT"
+  landing_note_image
+  landing_bootstrap
+  landing_stage ghostty-root ghostty_root_setup
+  landing_step fuse-pass lifecycle || failed=1
+  landing_step extract-pass lifecycle-extract || failed=1
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -2969,6 +3037,7 @@ main() {
     audit-landing) cmd_audit_landing "$@" ;;
     bun-lifecycle) cmd_bun_lifecycle "$@" ;;
     herdr-keys) cmd_herdr_keys "$@" ;;
+    ghostty) cmd_ghostty "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
