@@ -709,3 +709,16 @@ Plans:
 - `Placement` couples the generic region helper to the WezTerm skeleton;
 - a region the user moved (kitty keys region below an unscanned include, WezTerm shell region after `return config`) is not repaired.
 **Depends on:** Phase 29.
+
+### Phase 999.30: Ghostty onboarding follow-ups (BACKLOG)
+
+**Goal:** The Ghostty entry loses the rough edges the phase 30 reviews accepted, without changing what is written for any row.
+**Requirements:** TBD
+**Source:** Phase 30 review disposition `30-REVIEW-DISPOSITION.md`, accepted or deferred items:
+- an installer-created Ghostty config that becomes empty while the user later adds a legacy `config` makes the resolver switch, so removal leaves the created file with a mismatch warning (clean the recorded created path under the existing safety checks);
+- `_ghostty_plan` scans the process `HOME` and `environ` instead of the values passed to `apply_terminal_keys` (thread them through `KeysRow.plan`);
+- a reinstall overwrites a receipt-recorded menu entry the user edited (fingerprint the leaf);
+- the menu step runs on install only, not on update, and uses literal `~/.local/share` instead of `XDG_DATA_HOME`;
+- the menu leaves are told apart from other receipt leaves by path (a distinct artifact kind would be cleaner);
+- community rebuild tags such as `v1.4.0+1` cannot be expressed with one `{ver}` template, and bump tooling ignores build metadata.
+**Depends on:** Phase 30.
