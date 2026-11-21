@@ -546,19 +546,21 @@ Baseline: the two existing workflow test files pass today (`20 passed`, run this
 | A11 | `uv run` may rewrite `uv.lock` in the bot job | Code Examples notes | Moot: the commit is path-scoped to `installer/registry.toml` |
 | A12 | argparse/stdlib differences in Python 3.14/3.15 do not affect the new tests | Environment | A CI-only failure; targeted tests under 3.15 would be needed |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+Each question carries an explicit disposition (orchestrator decisions of 2026-11-21, `33-REVIEWS.md` and the plans). Only Q1 stays unanswered by design: it is an owner-gated item that the proof runbook answers after landing, and the phase verification lists it as `human_needed`.
 
 1. **Does a dispatched CI run satisfy `main`'s required checks for a fast-forward? (BOT-02)**
    - Known: docs say dispatch checks do not satisfy a branch ruleset on a PR head; `main` has classic protection, no ruleset, no PR flow.
    - Unclear: classic protection behavior.
-   - Recommendation: prove with Option A (throwaway protected target) plus Option B; decide the token route or the re-push fallback (A3) only if it fails. Owner decision needed on whether Option A's temporary branch protection write is acceptable (it changes a repo setting on a throwaway branch only). NOT RESOLVED.
+   - Recommendation: prove with Option A (throwaway protected target) plus Option B; decide the token route or the re-push fallback (A3) only if it fails. Owner decision needed on whether Option A's temporary branch protection write is acceptable (it changes a repo setting on a throwaway branch only). DISPOSITION: deferred to the owner's proof (runbook `docs/registry-bot-proof.txt`, plan 33-04); not resolved by research, listed in VERIFICATION as `human_needed`.
 2. **When can the proof run, given the files must be on `main` first?**
    - Known: `main` is 175 commits behind and has no phase-33 files; F4.
-   - Recommendation: the proof is the phase's last, owner-gated step after the owner lands the branch; plan the VERIFICATION entry as "pending owner checkpoint" until then. Also decide whether the phase can be closed before it (SPEC says no: "proved once ... before the phase is done"). NOT RESOLVED (owner/roadmap decision).
-3. **Closing keyword vs fast-forward** (D-08) cannot be proved without pushing `main`; recommend keeping the keyword with the owner-closes fallback, and note in VERIFICATION that it was not exercised. Optionally the bot could close a stale `registry-bot` issue on a later no-drift run; that is a publishing-class action and would need a D-03 amendment. NOT RESOLVED (optional).
+   - Recommendation: the proof is the phase's last, owner-gated step after the owner lands the branch; plan the VERIFICATION entry as "pending owner checkpoint" until then. Also decide whether the phase can be closed before it (SPEC says no: "proved once ... before the phase is done"). RESOLVED provisionally by orchestrator decision 1: the phase's code is complete and tested without the proof, the proof is the owner's after-landing checkpoint and the verification is `human_needed`; needs confirmation.
+3. **Closing keyword vs fast-forward** (D-08) cannot be proved without pushing `main`; recommend keeping the keyword with the owner-closes fallback, and note in VERIFICATION that it was not exercised. Optionally the bot could close a stale `registry-bot` issue on a later no-drift run; that is a publishing-class action and would need a D-03 amendment. RESOLVED by orchestrator decision 8: keep the keyword with the owner-closes fallback; VERIFICATION states it was not exercised; the optional stale-issue close is not done.
 4. **Same-day rerun quietness (Pitfall 5)**: keep simple (force-update, CI re-dispatch) or add fixed commit dates plus skip-if-identical. Claude's discretion; recommend simple.
-5. **Dependabot gap:** the Dependabot PR flow conflicts with "never a pull request"; D-17 accepts it for action bumps only. Confirm the owner is fine with Dependabot-opened PRs that are landed by fast-forward of their branch. NOT RESOLVED (owner), low stakes.
-6. **actionlint run:** blocked here by the permission classifier; the executing agent needs a disposable-container run (or the owner's go-ahead) to record real output. NOT RESOLVED.
+5. **Dependabot gap:** the Dependabot PR flow conflicts with "never a pull request"; D-17 accepts it for action bumps only. Confirm the owner is fine with Dependabot-opened PRs that are landed by fast-forward of their branch. RESOLVED provisionally by orchestrator decision 7 (needs confirmation, low stakes).
+6. **actionlint run:** blocked here by the permission classifier; the executing agent needs a disposable-container run (or the owner's go-ahead) to record real output. RESOLVED by orchestrator decision 6: an orchestrator-run step at the phase gate, recorded in VERIFICATION ("not run" with the reason if it cannot run, never a pass).
 7. **(RESOLVED)** Does `workflow_dispatch` need the workflow file on the default branch? Yes (F4, two doc quotes); D-12's rollout is correct and the proof must follow landing.
 8. **(RESOLVED)** Do the existing line citations still hold? Yes except the items listed in CONTEXT Reconciliation (helper names, `:38`, pinned-method counts, schedule timing).
 
