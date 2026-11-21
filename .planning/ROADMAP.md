@@ -238,11 +238,11 @@ Plans:
   4. gh-stack installs with `gh extension install https://github.com/github/gh-stack`, reads present from `gh extension list`, updates with `gh extension upgrade stack` and is removed with `gh extension remove stack` *(amended 2026-11-19, 32 D-10, D-11, needs confirmation: present from its manifest file, removed by its proven install folder; list and remove need a login)*; with an unauthenticated `gh` nothing blocks or prompts.
   5. Playwright MCP is registered as the pinned `bunx @playwright/mcp@0.0.85` in each agent host present, an existing `playwright` server entry is left as it was, the Flatpak Chrome path is exported on Bazzite only when the wrapper exists, and a write into `~/.claude/settings.json` asks for consent first.
 
-**Plans:** 9 plans
+**Plans:** 10 plans
 
 Plans:
 **Wave 1**
-- [ ] 32-01-PLAN.md — The `script` kind's three validated keys: the fixed-argv `install`, the closed `handoff` name and the script-before-brew `prefer` sort key; the tracer runs a manifest through the loader and the engine to the runner (ONB-11, ONB-12, ONB-14)
+- [ ] 32-01-PLAN.md — The `script` kind's three validated keys: the fixed-argv `install` (refused words at any position, a stdin-closed and terminal-detached console runner), the closed `handoff` name and the script-before-brew `prefer` sort key; the tracer runs a manifest through the loader and the engine to the runner (ONB-11, ONB-12, ONB-14)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 32-02-PLAN.md — The detect-only Xcode CLT entry (exact hand-off, Update refused, no removal, no-spawn guard) and the gh-stack extension entry (install, manifest detection, update, folder removal) (ONB-11, ONB-14)
@@ -251,22 +251,25 @@ Plans:
 - [ ] 32-03-PLAN.md — The AWS CLI entry (official script first with gpg kept, brew fallback, `~/.aws` never named) and the Bruno entry (pinned per-arch AppImages, macOS cask, no `bru`) (ONB-12, ONB-13)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 32-04-PLAN.md — The settings-ledger MCP writer: a three-level JSON insert and revert, and a merge-safe, receipt-recorded `playwright` server entry per host (Claude, Cursor, Copilot, OpenCode, Codex) plus Claude's env key (ONB-15)
+- [ ] 32-04-PLAN.md — The settings-ledger MCP writer: a three-level JSON insert and revert, and a merge-safe, receipt-recorded `playwright` server entry per host (Claude, Cursor, Copilot, OpenCode, Codex) with (file, key path) revert pairs and a one-unit Codex revert, plus Claude's env key (ONB-15)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 32-05-PLAN.md — The Playwright MCP entry: the registration hook with Claude behind the confirmed `hook_register` step, the Flatpak Chrome export, the settled read, the removal sweep and the pinned `0.0.85` entry (ONB-15)
+- [ ] 32-05-PLAN.md — The Playwright MCP entry: the registration hook with Claude behind the confirmed `hook_register` step (bound to the hosts it disclosed), the Bazzite-gated Flatpak Chrome export, the settled read, the removal sweep and the pinned `0.0.85` entry (ONB-15)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 32-06-PLAN.md — The `aws-cli` container target (Fedora with gpg, a no-gpg debian-slim leg), the shared evidence gate and the driver verdicts; proved on the host with a stubbed `ct`; the orchestrator runs the real target (ONB-12)
 
 **Wave 7** *(blocked on Wave 6 completion)*
-- [ ] 32-07-PLAN.md — The `bruno` container target: install, three run modes (UNPROVEN reported, never a pass) and a removal that keeps the user's collections; the orchestrator runs the real target (ONB-13)
+- [ ] 32-07-PLAN.md — The `bruno` container target: install, four run modes (UNPROVEN reported, never a pass; an applicable smoke result only for an argument-only mode) and a removal that keeps the user's collections; the orchestrator runs the real target (ONB-13)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 - [ ] 32-08-PLAN.md — The `playwright-mcp` container target: install, registration, the confirmed Claude step, a JSON-RPC launch smoke with the distro Chromium and removal; the orchestrator runs the real target (ONB-15)
 
 **Wave 9** *(blocked on Wave 8 completion and the orchestrator's recorded runs)*
 - [ ] 32-09-PLAN.md — Container evidence in the registry comments behind a hard gate on the recorded `aws-container: PASS` and `playwright-container: PASS` lines, the reported Bruno result, the skill row and architecture rules, and the catalog consistency guards (ONB-11 to ONB-15)
+
+**Wave 10** *(blocked on Wave 9 completion; independent of the container runs)*
+- [ ] 32-10-PLAN.md — The removal preview of the Playwright MCP entries: the exact host files and keys the sweep reverts, decided with the revert's own grouped Codex rule and allowed-file pairs, and a line naming an outside-home Copilot file (ONB-15)
 
 ### Phase 33: Registry update bot
 
