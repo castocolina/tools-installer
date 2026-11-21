@@ -3181,7 +3181,7 @@ aws_nogpg_leg() {
     find "$HOME/.local" /usr/local/bin /usr/local/aws-cli 2>/dev/null | sort
     echo TRACER_AWS_NOGPG_SCRIPT
     rc=0
-    # bash, as the registry entry's shell: the vendor script has bashisms, and dash (sh on Debian) cannot parse it.
+    # bash, as the registry entry does: the vendor script has bashisms that dash (sh on Debian) cannot parse.
     AWS_CLI_INSTALL_SKIP_SIGNATURE_VERIFICATION=false bash /tmp/aws-install.sh || rc=$?
     echo TRACER_AWS_NOGPG_AFTER
     find "$HOME/.local" /usr/local/bin /usr/local/aws-cli 2>/dev/null | sort

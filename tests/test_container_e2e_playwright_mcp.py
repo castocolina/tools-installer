@@ -301,6 +301,9 @@ def test_the_rpc_client_talks_to_a_fake_server_through_files(tmp_path: Path) -> 
     pid = int(pidfile.read_text())
     # A killed descendant may remain a zombie until init reaps it; it cannot execute.
     stat = Path(f"/proc/{pid}/stat")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and stat.exists() and stat.read_text().split()[2] != "Z":
+        time.sleep(0.05)
     assert not stat.exists() or stat.read_text().split()[2] == "Z"
     missing = driver.run_rpc([str(tmp_path / "missing")], os.environ, driver.frames(), 1)
     assert not missing.started and "missing" in missing.stderr_tail

@@ -141,9 +141,11 @@ def test_an_interrupted_run_command_stops_the_childs_whole_process_group(
     with pytest.raises(KeyboardInterrupt):
         run_command([sys.executable, "-c", child_code])
     grandchild = int(pidfile.read_text())
-    time.sleep(0.3)
     # A killed descendant may remain a zombie until init reaps it; it cannot execute.
     stat = Path(f"/proc/{grandchild}/stat")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and stat.exists() and stat.read_text().split()[2] != "Z":
+        time.sleep(0.05)
     assert not stat.exists() or stat.read_text().split()[2] == "Z"
     time.sleep(2.2)
     assert not marker.exists()

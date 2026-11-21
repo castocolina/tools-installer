@@ -103,7 +103,11 @@ class FailingScript:
             raise error
 
 
-def test_a_failing_script_falls_through_to_brew() -> None:
+def test_a_failing_script_falls_through_to_brew(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A runner image may already carry a real `aws`; the engine's smoke must not find it.
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
     tool = catalog()["aws-cli"]
     runner = FailingScript()
     outcome = install_tool(tool, FEDORA, runner, present=lambda _tool: False)
@@ -117,7 +121,10 @@ def test_a_failing_script_falls_through_to_brew() -> None:
     assert "gpg not found" in str(outcome.errors[-1])
 
 
-def test_the_brew_fallback_is_reachable_without_unzip() -> None:
+def test_the_brew_fallback_is_reachable_without_unzip(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
     tools = catalog()
     aws, unzip = tools["aws-cli"], tools["unzip"]
     selected = [unzip, aws]

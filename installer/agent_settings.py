@@ -1668,8 +1668,14 @@ def _previewable(
             continue
         if setting == MCP_SETTING and agent not in MCP_AGENTS:
             continue
-        if file not in _agent_files(
-            agent, home=home, platform_os=platform_os, environ=environ, setting=setting
+        # A ledger written on another OS (a copied home) lists that OS's file; the revert judges
+        # by the host, so the preview only reports the files either OS could name for the setting.
+        if not any(
+            file
+            in _agent_files(
+                agent, home=home, platform_os=candidate, environ=environ, setting=setting
+            )
+            for candidate in dict.fromkeys((platform_os, "linux", "macos"))
         ):
             continue
         mine, _ = _eligible(
