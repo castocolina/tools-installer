@@ -794,3 +794,19 @@ Plans:
 - strip deletes the iTerm2 profile file on marker and GUID proof even if the user appended a second profile to it;
 - the stale `switched` record after a two-failure sequence (restore succeeds, record update fails, cask removal fails) heals only on reinstall.
 **Depends on:** Phase 31.
+
+### Phase 999.32: Phase 32 onboarding follow-ups (BACKLOG)
+
+**Goal:** The Xcode CLT, AWS CLI, Bruno, gh-stack and Playwright MCP entries lose the rough edges the phase 32 reviews accepted, without changing what is written for any host.
+**Requirements:** TBD
+**Source:** Phase 32 review disposition `32-REVIEW-DISPOSITION.md`, the plan reviews `32-REVIEWS.md` and the security audit's accepted-risks log `32-SECURITY.md`, accepted or deferred items:
+- Bruno's AppImage writes no menu entry (32 D-08): add the entry once the AppImage smoke is confirmed on a real FUSE host (the container check is UNPROVEN: rootless podman cannot mount FUSE) and settle `smoke_argv`, `--no-sandbox` and the display-less smoke there;
+- `gh extension` data under a relocated GitHub CLI data directory is not detected, and its receipt-proven folder is the default path only;
+- the validator's launcher check compares the basename of every argv token, so a token such as `owner/time` is refused as a launcher (a false positive that fails closed; no shipped row is affected);
+- the shared landing helper removes the image tag when its inspection failed at the start of the run, so a concurrent pull of the same tag by another process loses its image (inherited by every landing target since phase 24);
+- `run_command` detaches the controlling terminal (and now stops the whole process group on interruption), so a cask's internal `sudo` prompt cannot read a password on the console route (the TUI routes already behave this way; the project rule is zero sudo with a hand-off);
+- the AWS `install.sh` and the `gh extension install` fetch have no installer-side digest, and `@playwright/mcp` is pinned by version without an integrity digest;
+- Claude's live `~/.claude.json` can be rewritten after the registration write (retry once), `CLAUDE_CONFIG_DIR` is not honored, an absolute `COPILOT_HOME` is reverted but not listed in the removal preview, and a later pin does not replace an existing registration;
+- `UNIT_PREFIXES` has a single member (the Codex server) for its whole lifetime: inline it or keep the set for a second multi-key host;
+- Pi gets a manual `pi mcp add` note and no automatic entry (no ledger path, format unverified).
+**Depends on:** Phase 32.
