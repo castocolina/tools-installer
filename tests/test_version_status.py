@@ -7488,6 +7488,56 @@ def test_ghostty_drift_lands_on_its_own_row(tmp_path: Path) -> None:
     )
 
 
+def test_an_unrecorded_iterm2_row_reads_pending_install_tuning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_iterm2_row import MAC, fake_defaults, tool
+
+    fake_defaults(monkeypatch)
+    t = tool()
+    service = _hook_service(tmp_path, frozenset())
+    assert _settled_states(service, [t])[t.id].unconfigured == (_TUNING_STEP,)
+    apply_install_tuning(t, MAC, skip_recorded=False)
+    assert _settled_states(service, [t])[t.id].unconfigured == ()
+
+
+def test_iterm2_drift_lands_on_its_own_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer.iterm2_profile import profile_path
+    from tests.test_iterm2_row import MAC, fake_defaults, tool
+
+    fake_defaults(monkeypatch)
+    t = tool()
+    apply_install_tuning(t, MAC, skip_recorded=False)
+    path = profile_path(Path.home())
+    path.write_text(path.read_text().replace('"Name": "tools-installer"', '"Name": "changed"'))
+    other = _shell_tool("ghostty")
+    apply_install_tuning(other, _LINUX, skip_recorded=False)
+    states = _settled_states(_hook_service(tmp_path, frozenset()), [t, other])
+    assert states[t.id].unconfigured == (_TUNING_STEP,)
+    assert states[other.id].unconfigured == ()
+
+
+def test_a_pending_iterm2_default_switch_reads_pending_install_tuning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from installer.iterm2_profile import DEFAULT_GUID_KEY, read_state, write_state
+    from tests.test_iterm2_row import MAC, OTHER, fake_defaults, tool
+
+    fake = fake_defaults(monkeypatch)
+    t = tool()
+    apply_install_tuning(t, MAC, skip_recorded=False)
+    state = read_state(Path.home(), os.environ)
+    assert state is not None
+    write_state(Path.home(), os.environ, replace(state, switched=False))
+    fake.prefs.pop(DEFAULT_GUID_KEY)
+    service = _hook_service(tmp_path, frozenset())
+    assert _settled_states(service, [t])[t.id].unconfigured == (_TUNING_STEP,)
+    fake.prefs[DEFAULT_GUID_KEY] = OTHER
+    assert _settled_states(service, [t])[t.id].unconfigured == ()
+
+
 def test_ghostty_partial_is_a_reason_not_a_step(tmp_path: Path) -> None:
     warning = "ghostty: partial: you already set command"
     service = _drift_service(tmp_path, _warned(warning), present=frozenset({"ghostty"}))

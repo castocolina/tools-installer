@@ -3250,6 +3250,29 @@ cask = "ghostty"
 app = "Ghostty.app"
 min_os_version = "13"
 
+# Verified 2026-11-21: Homebrew cask iterm2 3.7.8 needs macOS 13 and updates itself.
+# iTerm2 has no command; presence comes from the iTerm.app bundle.
+# The owned DynamicProfiles/tools-installer.json becomes default; uninstall restores the previous default.
+# Keys and values are from iTerm2 v3.7.8 source; runtime behavior awaits Mac UAT.
+# No config_paths: the preferences plist is daemon-cached and the folder holds other profiles.
+[[tool]]
+id = "iterm2"
+name = "iTerm2"
+category = "terminal"
+priority = "P3"
+audience = "human"
+tier = "user"
+verified = 2026-11-21
+desc = "macOS terminal emulator; the installer adds its own default profile"
+# Install tuning (31 D-02, D-11): the installer-owned Dynamic Profile, made the default profile; an uninstall restores the previous default.
+post_install = ["apply_terminal_tuning"]
+[[tool.method]]
+kind = "cask"
+os = ["macos"]
+cask = "iterm2"
+app = "iTerm.app"
+min_os_version = "13"
+
 # Verified 2026-11-08, re-checked 2026-11-12 against the v0.9.5 tag source (24 D-09, D-10,
 # D-12): herdr is a single static binary published per OS and arch as a raw release asset
 # (herdr-linux-x86_64, herdr-linux-aarch64, herdr-macos-x86_64, herdr-macos-aarch64; the

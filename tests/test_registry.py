@@ -279,6 +279,7 @@ _POST_15_3_HUMAN_TOOLS = {
     "alacritty",
     "copilot",
     "ghostty",  # Phase 30
+    "iterm2",  # Phase 31
     "neovim",  # Phase 24.1
 }
 
@@ -301,7 +302,7 @@ def test_registry_audience_distribution_is_pinned() -> None:
     assert dict(Counter(t.audience for t in load_tools(REGISTRY))) == {
         "both": 50,  # Phase 24 adds herdr, unzip and zip (audience both)
         "ai": 8,
-        "human": 29,  # Phase 30 adds ghostty (audience human)
+        "human": 30,  # Phase 31 adds iTerm2
     }
 
 
@@ -795,7 +796,7 @@ def test_download_tools_resolve_brew_then_github_release_on_macos() -> None:
 # patch macOS's ancient system bash, so it has nothing to install on Linux
 # (already at a modern bash). vscode/sublime/jetbrains-toolbox all gained
 # official Linux tarball methods -- see their registry entries.
-MACOS_ONLY = {"gnu-bash"}
+MACOS_ONLY = {"gnu-bash", "iterm2"}
 # Apple Containers: Homebrew itself requires macos>=26 and arch=arm64. Membership
 # means the tool cannot work on that platform+arch, not that packaging is inconvenient.
 MACOS_ARM64_ONLY = {"container", "podman"}
@@ -1212,7 +1213,7 @@ def test_drawio_desktop_is_the_only_drawio_row() -> None:
     tools = _tools_by_id()
     assert "drawio-cli" not in tools
     assert tools["drawio-desktop"].audience == "both"
-    assert len(tools) == 87  # Phase 24 adds herdr, unzip and zip; 24.1 adds neovim; 30 adds ghostty
+    assert len(tools) == 88  # Phase 31 adds iTerm2
 
 
 def test_removed_owner_probe_is_rejected_at_load(tmp_path: Path) -> None:
@@ -1267,7 +1268,7 @@ def test_registry_tier_distribution_is_pinned() -> None:
     assert dict(Counter(t.tier for t in load_tools(REGISTRY))) == {
         "system": 28,  # Phase 24 adds unzip and zip (SDKMAN prerequisites)
         "ai": 9,
-        "user": 50,  # Phase 24 adds herdr; 24.1 adds neovim; 30 adds ghostty (tier user)
+        "user": 51,  # Phase 31 adds iTerm2
     }
 
 
@@ -1362,6 +1363,7 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
     region, written at install with no question). Phase 29 reviewed kitty's and WezTerm's
     apply_terminal_tuning (29 D-01, D-06: their keys regions, written at install with no question).
     Phase 30 reviewed Ghostty's apply_terminal_tuning (30 D-11: its keys region).
+    Phase 31 reviewed iTerm2's owned default profile.
     Phase 24.1 reviewed Neovim's
     `clone_nvim_starter` and `show_nvim_hints` (24.1 D-15, D-19); neovim was already a
     shell-init tool, so the declarer set did not change.
@@ -1375,6 +1377,7 @@ def test_only_reviewed_tools_declare_a_post_install_action() -> None:
         "kitty",
         "wezterm",
         "ghostty",
+        "iterm2",
         *tuned,
         *SHELL_INIT_TOOLS,
     }

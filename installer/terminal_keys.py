@@ -28,6 +28,21 @@ from installer.agent_settings import (
     write_if_unchanged,
 )
 from installer.atomic import atomic_write_text
+from installer.iterm2_profile import (
+    ITERM2_CREATED,
+    ProfileState,
+    hook_after_write,
+    hook_before_write,
+    hook_restore,
+    hook_still_named,
+    hook_switch_pending,
+    iterm2_profile_text,
+    iterm2_proof,
+    merge_rows,
+    profile_path,
+    read_state,
+    validate_iterm2,
+)
 from installer.run import CommandError, run_output
 from installer.terminal_regions import (
     ALACRITTY,
@@ -344,6 +359,30 @@ def _wezterm_readback(platform_os: str, path: Path) -> tuple[str, ...]:
     return () if output is None else wezterm_readback(output, _wezterm_rows(platform_os))
 
 
+def _iterm2_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> Path:
+    del platform_os, environ
+    return profile_path(home)
+
+
+def _iterm2_plan(
+    platform_os: str, text: str, path: Path, home: Path, environ: Mapping[str, str]
+) -> KeysPlan:
+    del platform_os, text, path
+    state = read_state(home, environ) or ProfileState(None, None, False, False, merge_rows({})[0])
+    return KeysPlan(
+        iterm2_profile_text(
+            state, recycle=isinstance(TERMINAL_KEYS["iterm2"].same_directory, Writes)
+        ),
+        notes=(
+            "iterm2: cmd+k now sends Ctrl+L instead of the Clear Buffer menu item.",
+            "iterm2: changes made in the iTerm2 settings window do not stick (a Dynamic Profile).",
+            "iterm2: iTerm2 skips a Dynamic Profiles file it cannot parse and reports it.",
+            "iterm2: iTerm2 quits when it is removed; uninstall it from another terminal "
+            "so the profile file is deleted with it.",
+        ),
+    )
+
+
 TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
     "alacritty": KeysRow(
         ownership=OwnedRegion(ALACRITTY_KEYS),
@@ -419,6 +458,30 @@ TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
         bind_created_path=True,
         strip_files=ghostty_default_files,
     ),
+    "iterm2": KeysRow(
+        ownership=WholeFile(
+            proof=iterm2_proof,
+            plan=_iterm2_plan,
+            hook=DefaultProfile(
+                before_write=hook_before_write,
+                after_write=hook_after_write,
+                restore=hook_restore,
+                still_named=hook_still_named,
+                switch_pending=hook_switch_pending,
+            ),
+        ),
+        config_path=_iterm2_path,
+        plan=variant_plan,
+        validate=validate_iterm2,
+        summary=(
+            "iTerm2 profile: tools-installer (Option+Left and Option+Right move by word with "
+            "Option left Normal, Cmd+K sends Ctrl+L to clear the screen and scrollback, "
+            "new tabs, windows and panes open in the current directory); it becomes your "
+            "default profile unless a partial line says otherwise."
+        ),
+        created_record=ITERM2_CREATED,
+        same_directory=Writes('"Custom Directory": "Recycle"'),
+    ),
 }
 
 
@@ -469,6 +532,13 @@ def _apply_whole_file(
         return ((), None) if recorded else ((), plan.refusal)
     hook = whole.hook
     before_lines = hook.before_write(platform_os, home, environ, skip_recorded) if hook else ()
+    if hook:
+        try:
+            plan = whole.plan(platform_os, text, path, home, environ)
+        except OSError as exc:
+            return before_lines, first_line(exc)
+        if plan.refusal is not None:
+            return before_lines, plan.refusal
     changed = plan.body is not None and plan.body != text
     if changed and plan.body is not None:
         try:

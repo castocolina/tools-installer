@@ -80,7 +80,7 @@ from installer.shellrc import (
 )
 from installer.status import is_installed
 from installer.systemd_daemon import CompetingUnit
-from installer.terminal_keys import TERMINAL_KEYS, strip_terminal_keys
+from installer.terminal_keys import TERMINAL_KEYS, before_removal_terminal_keys, strip_terminal_keys
 from installer.tweaks import (
     SHELL_INIT_TOOLS,
     TweakBundle,
@@ -778,7 +778,35 @@ def remove_tool(
     listing no longer shows runs nothing and retires its receipt (`already removed`). bun's
     tree is checked too: a package it kept as another global's peer is reported kept, never
     removed, and its receipt stays. A failed undo or command deletes nothing and keeps the
-    receipt, so a later plan still sees the tool."""
+    receipt, so a later plan still sees the tool. Terminal restore lines reach every later
+    outcome; an unconfirmed restore refuses removal."""
+    hook_notes: list[str] = []
+    removal = _remove_tool_steps(
+        tool,
+        paths=paths,
+        argv=argv,
+        bin_dir=bin_dir,
+        runner=runner,
+        unregister=unregister,
+        hook_notes=hook_notes,
+    )
+    return (
+        dataclasses.replace(removal, detail=" ".join(filter(None, (removal.detail, *hook_notes))))
+        if hook_notes
+        else removal
+    )
+
+
+def _remove_tool_steps(
+    tool: Tool,
+    *,
+    paths: tuple[Path, ...],
+    argv: tuple[str, ...],
+    bin_dir: Path,
+    runner: Runner,
+    unregister: tuple[tuple[str, ...], ...],
+    hook_notes: list[str],
+) -> ToolRemoval:
     try:
         fresh = removal_plan(tool, bin_dir, verify=True)
         if fresh.level == "receipt":
@@ -798,6 +826,26 @@ def remove_tool(
         if changed or argv != fresh.argv or unregister != fresh.unregister or not (paths or argv):
             refused = tuple(f"changed since the preview; not removed: {p}" for p in changed)
             return ToolRemoval(tool.id, False, "changed since the preview; not removed", refused)
+        # Restore before the manager quits the app; the later strip restores again and deletes
+        # the profile only when confirmed (orchestrator decision 2, 31 D-11).
+        row = TERMINAL_KEYS.get(tool.id)
+        if row is not None:
+            restored = before_removal_terminal_keys(
+                row, tool.id, HOST_SETTINGS_OS, Path.home(), os.environ
+            )
+            if not restored.confirmed:
+                return ToolRemoval(
+                    tool.id,
+                    False,
+                    " ".join(
+                        (
+                            *restored.lines,
+                            f"{tool.id} was not removed because its default profile could not be "
+                            "restored; set your default profile in the app, then uninstall again",
+                        )
+                    ),
+                )
+            hook_notes.extend(restored.lines)
         # The undo runs while the proven executable still exists, before any path goes (SPEC R1).
         for undo in fresh.unregister:
             try:

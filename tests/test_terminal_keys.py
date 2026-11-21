@@ -252,7 +252,7 @@ def apply_alacritty_keys(
 
 def test_alacritty_row_is_keyed_by_its_registry_id() -> None:
     row = TERMINAL_KEYS["alacritty"]
-    assert set(TERMINAL_KEYS) == {"alacritty", "kitty", "wezterm", "ghostty"}
+    assert set(TERMINAL_KEYS) == {"alacritty", "kitty", "wezterm", "ghostty", "iterm2"}
     assert row.ownership == OwnedRegion("alacritty-keys")
     assert row.created_record == "terminal-alacritty-created"
     assert row.sibling_regions == ("alacritty",)
@@ -289,7 +289,13 @@ def test_completeness_fails_for_a_declarer_without_a_row(tmp_path: Path) -> None
 
 
 def test_completeness_fails_on_an_empty_table() -> None:
-    assert missing_rows(load_tools(REGISTRY), {}) == {"alacritty", "kitty", "wezterm", "ghostty"}
+    assert missing_rows(load_tools(REGISTRY), {}) == {
+        "alacritty",
+        "kitty",
+        "wezterm",
+        "ghostty",
+        "iterm2",
+    }
 
 
 def test_completeness_ignores_table_order(tmp_path: Path) -> None:
