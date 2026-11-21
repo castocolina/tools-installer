@@ -1,7 +1,7 @@
 import inspect
 import re
 import threading
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -8165,7 +8165,11 @@ async def test_uninstall_values_render_literally(monkeypatch: pytest.MonkeyPatch
     odd = "[red]x[/]"
 
     def ledger(
-        agent: str, *, home: Path
+        agent: str,
+        *,
+        home: Path,
+        settings: Collection[str] | None = None,
+        environ: Mapping[str, str] | None = None,
     ) -> tuple[tuple[Path, tuple[str, ...], tuple[str, ...]], ...]:
         return ((Path(f"/cfg/{odd}.json"), (odd,), ()),) if agent == "claude" else ()
 

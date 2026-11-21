@@ -14,7 +14,7 @@ from typing import cast
 
 from rich.console import Console
 
-from installer import receipts, shellrc
+from installer import agent_settings, receipts, shellrc
 from installer.agent_settings import FileResult, ledger_preview, revert_agent, revert_mcp
 from installer.atomic import atomic_write_text
 from installer.bun_globals import bun_keeps, resolve_bun
@@ -542,13 +542,17 @@ def removal_order(tools: Sequence[Tool]) -> list[Tool]:
 HOST_SETTINGS_OS = "macos" if sys.platform == "darwin" else "linux"
 
 
-def settings_change_lines(agent_ids: Iterable[str]) -> tuple[str, ...]:
+def settings_change_lines(
+    agent_ids: Iterable[str], *, settings: Collection[str] | None = None
+) -> tuple[str, ...]:
     """The settings keys a revert removes, one line per ledgered file (UI-SPEC section 6), and
     the keys it keeps because the user changed them since (F-3). A recorded file that is gone
     is named as such: the revert reports it and touches nothing."""
     lines: list[str] = []
     for agent in agent_ids:
-        for path, removes, kept in ledger_preview(agent, home=Path.home()):
+        for path, removes, kept in ledger_preview(
+            agent, home=Path.home(), settings=settings, environ=os.environ
+        ):
             if not os.path.lexists(path):
                 lines.append(
                     f"{agent}: cannot remove {', '.join(removes)}: {display_path(path)} is missing"
@@ -561,6 +565,13 @@ def settings_change_lines(agent_ids: Iterable[str]) -> tuple[str, ...]:
                 lines.append(
                     f"{agent}: keeps {', '.join(kept)}, changed since this installer wrote {them}"
                 )
+        for path, keys, reason in agent_settings.ledger_unreadable(
+            agent, home=Path.home(), settings=settings, environ=os.environ
+        ):
+            lines.append(
+                f"{agent}: cannot remove {', '.join(keys)}: {display_path(path)} "
+                f"cannot be read ({reason}); the removal leaves it as it is"
+            )
     return tuple(lines)
 
 
@@ -574,6 +585,25 @@ def removal_change_lines(
     for tool in tools:
         if tool.id in receipts.CONFIG_AGENTS:
             lines.extend(settings_change_lines((tool.id,)))
+        if tool.postinstall == "playwright-mcp-register":
+            lines.extend(
+                settings_change_lines(
+                    agent_settings.MCP_AGENTS, settings=(agent_settings.MCP_SETTING,)
+                )
+            )
+            lines.extend(
+                settings_change_lines(("claude",), settings=(agent_settings.MCP_ENV_SETTING,))
+            )
+            if agent_settings.ledger_outside_home(
+                "copilot",
+                home=Path.home(),
+                settings=(agent_settings.MCP_SETTING,),
+                environ=os.environ,
+            ):
+                lines.append(
+                    "copilot: a settings file outside your home (an absolute COPILOT_HOME) "
+                    "is reverted too but not listed here"
+                )
         if tool.id in SHELL_INIT_TOOLS and f"tweak:{tool.id}" in active_tweaks:
             lines.append(f"{tool.id}: turns off its shell init in ~/.myshellrc")
     return tuple(lines)

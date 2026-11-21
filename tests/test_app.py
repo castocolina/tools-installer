@@ -5429,6 +5429,151 @@ def test_the_cli_uninstall_lists_only_keys_still_holding_our_value(
     assert "  ~/.codex/config.toml: approval_policy\n" in buf.getvalue()
 
 
+def _preview_playwright_tool() -> Tool:
+    return Tool(
+        id="playwright-mcp",
+        name="Playwright",
+        category="ai",
+        cmd="playwright-mcp",
+        methods=(Method(kind="bun", params={"npm_pkg": "@playwright/mcp"}),),
+        postinstall="playwright-mcp-register",
+    )
+
+
+def _preview_mcp_write(agent: str, home: Path, environ: Mapping[str, str] | None = None) -> Path:
+    from installer.agent_settings import apply_mcp_server
+
+    result = apply_mcp_server(
+        agent,
+        command="bunx",
+        spec="@playwright/mcp@0.0.85",
+        executable_path=None,
+        home=home,
+        platform_os="linux",
+        environ=environ,
+    )
+    assert result.refused is None
+    return result.path
+
+
+def test_the_removal_preview_lists_the_exact_files_and_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import agent_settings, app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("COPILOT_HOME", raising=False)
+    for agent in ("codex", "cursor-agent", "opencode"):
+        _preview_mcp_write(agent, tmp_path)
+    assert (
+        agent_settings.apply_setting(
+            "codex", "auto-approve", home=tmp_path, platform_os="linux"
+        ).refused
+        is None
+    )
+    assert (
+        agent_settings.apply_value(
+            "claude", agent_settings.MCP_ENV_SETTING, "/chrome", home=tmp_path, platform_os="linux"
+        ).refused
+        is None
+    )
+    cursor = tmp_path / ".cursor" / "mcp.json"
+    data = json.loads(cursor.read_text())
+    data["mcpServers"]["playwright"]["command"] = "mine"
+    cursor.write_text(json.dumps(data))
+    lines = app.removal_change_lines([_preview_playwright_tool()], active_tweaks=())
+    assert (
+        "codex: removes mcp_servers.playwright.command, mcp_servers.playwright.args "
+        "from ~/.codex/config.toml" in lines
+    )
+    assert "opencode: removes mcp.servers.playwright from ~/.config/opencode/opencode.json" in lines
+    assert (
+        "claude: removes env.PLAYWRIGHT_MCP_EXECUTABLE_PATH from ~/.claude/settings.json" in lines
+    )
+    assert (
+        "cursor-agent: keeps mcpServers.playwright, changed since this installer wrote it" in lines
+    )
+    assert not any(
+        "approval_policy" in line or "sandbox_mode" in line or line.startswith("copilot:")
+        for line in lines
+    )
+    assert app.removal_change_lines([_tool("unrelated", "ai")], active_tweaks=()) == ()
+
+
+def test_the_removal_preview_keeps_the_whole_codex_server_when_a_field_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import removal_change_lines
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    path = _preview_mcp_write("codex", tmp_path)
+    path.write_text(path.read_text().replace("@playwright/mcp@0.0.85", "mine"))
+    lines = removal_change_lines([_preview_playwright_tool()], active_tweaks=())
+    assert (
+        "codex: keeps mcp_servers.playwright.command, mcp_servers.playwright.args, "
+        "changed since this installer wrote them" in lines
+    )
+    assert not any(line.startswith("codex: removes") for line in lines)
+
+
+def test_the_removal_preview_says_a_malformed_file_is_not_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import agent_settings, app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _preview_mcp_write("codex", tmp_path)
+    cursor = _preview_mcp_write("cursor-agent", tmp_path)
+    tool = _preview_playwright_tool()
+    intact = app.removal_change_lines([tool], active_tweaks=())
+    assert not any("cannot be read" in line for line in intact)
+    cursor.write_text("{broken")
+    before = cursor.read_bytes()
+    lines = app.removal_change_lines([tool], active_tweaks=())
+    assert any(
+        line.startswith(
+            "cursor-agent: cannot remove mcpServers.playwright: ~/.cursor/mcp.json cannot be read ("
+        )
+        and line.endswith("); the removal leaves it as it is")
+        for line in lines
+    )
+    assert not any(line.startswith("cursor-agent: removes") for line in lines)
+    assert any(line.startswith("codex: removes") for line in lines)
+    agent_settings.revert_mcp(home=tmp_path, platform_os="linux", environ={})
+    assert cursor.read_bytes() == before
+    cursor.unlink()
+    lines = app.removal_change_lines([tool], active_tweaks=())
+    assert (
+        "cursor-agent: cannot remove mcpServers.playwright: ~/.cursor/mcp.json is missing" in lines
+    )
+
+
+def test_the_removal_preview_names_an_external_copilot_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.app import removal_change_lines
+
+    home = tmp_path / "home"
+    home.mkdir()
+    external = tmp_path / "external"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("COPILOT_HOME", str(external))
+    tool = _preview_playwright_tool()
+    notice = (
+        "copilot: a settings file outside your home (an absolute COPILOT_HOME) "
+        "is reverted too but not listed here"
+    )
+    assert notice not in removal_change_lines([tool], active_tweaks=())
+    _preview_mcp_write("copilot", home, {"COPILOT_HOME": str(external)})
+    lines = removal_change_lines([tool], active_tweaks=())
+    assert notice in lines
+    assert not any(str(external) in line for line in lines)
+    monkeypatch.setenv("COPILOT_HOME", str(home / ".copilot"))
+    assert notice not in removal_change_lines([tool], active_tweaks=())
+    _preview_mcp_write("copilot", home, {"COPILOT_HOME": str(home / ".copilot")})
+    assert notice not in removal_change_lines([tool], active_tweaks=())
+
+
 def test_removal_reverts_the_playwright_entries_and_keeps_the_users(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
