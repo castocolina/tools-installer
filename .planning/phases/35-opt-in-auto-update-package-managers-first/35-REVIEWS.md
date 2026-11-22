@@ -430,3 +430,228 @@ Using the plan-review checklist and Ponytail Review to assess all ten plans, wit
 ### Status: Issues Found — revise and re-review
 
 No tests, updaters, timer units, desktop notifications, or containers were run. Actual uv replacement, shell-file effects, timer delivery, and desktop delivery remain unverified.
+
+---
+
+## Lane Log (convergence cycle 3, plans at ba9c8456)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 09:31 | opencode-referee-one | one-shot probe | OK |
+| 09:31 to about 10:30 | opencode-referee-one | real review through `gsd-tools query review-lane invoke`, background, 2700 s timeout, stdin `/dev/null`, cycle 2 findings supplied | exit 0 |
+
+Failures this cycle: none. No other lane or model was used.
+
+## Orchestrator verification of the cycle 3 concerns (LAST cycle: cap rule)
+
+Cycle 3 of 3. HIGH count fell 10, then 8, now 5. The cap is three cycles, so there is no cycle 4: replan round 3 is the last revision and executes without a re-review; anything found afterwards goes to the post-execution fix round. Claims that rest on repository code are for the planner to verify and fix or reject with a stated reason in the Round 3 ledger. DECISIONS apply exactly; all provisional.
+
+| Id | Claim | Judgment and DECISION |
+|---|---|---|
+| L1 (35-01) HIGH | Lock metadata is not proof of a handoff: `held_by` compares the supplied job and pid with `holder()`, which reads text and checks the pid is alive; it does not check the kernel lock (`installer/runlock.py:56-98`); an unrelated invocation naming the live holder would pass | Real by the referee's reading; planner verifies. DECISION: the child additionally proves the KERNEL lock is held: a non-blocking acquire attempt on the lock file must fail as busy (if it succeeds nobody holds it: release it and refuse with the fixed line); the recorded job and pid must match a live holder as before; test no kernel lock held, text naming a live pid without a held lock, and wrong job/pid/path all refuse. State the residual honestly: the lock is advisory and a same-user process that holds the real lock and names itself can pass (same user trust boundary). |
+| L2 (35-01) MEDIUM | The timer busy test can wait two hours: the wait seam is unspecified | DECISION: shorten both wait constants as `tests/test_schedule_runner.py:734-747` does. |
+| P1 (35-02) MEDIUM | The exact-refusal fixture asks for a pinned `github_release`; `pinned_method()` only knows `app` and `tarball` (`installer/download.py:178-187`) | DECISION: use an `app` or `tarball` fixture for the pinned-refusal case. |
+| S1 (35-03) MEDIUM | The writer can save a record its own reader rejects (no write-side cap) | DECISION: enforce the reader's cap before replacement (as `installer/version_cache.py:221-245`); a record that would exceed it reports `not saved`; test it. |
+| S2 (35-03) MEDIUM | The smoke failure test calls `_update_tool`, which does not write the record; persistence is in `_run_update_row` | DECISION: test through the public dispatcher (`tests/test_schedule_update.py:306-332`). |
+| A5 (35-04) HIGH | A confirmed tool id can authorize an update to a DIFFERENT copy: Ruff reported outdated by uv can be brew-owned at execution; if brew completed, that copy is upgraded without brew evidence (`installer/version_status.py:662-710`; `installer/update.py:195-209,660-714`) | Real by the referee's reading; planner verifies. DECISION: confirmed evidence is bound to the route that produced it: record (id, owner) with each confirmed id; the guard refuses with `skipped: owner changed since the evidence` when the fresh owner differs; test the Ruff uv-to-brew case through the real service. |
+| A6 (35-04) HIGH | Planner-skipped managers are marked complete without checking their failed upstream: brew fails, brew-owned uv is skipped as updated today, Ruff's owner and `requires` point to uv, and nothing carries the failure; the same rule can authorize a manager whose fresh owner is on a cycle-blocked branch | DECISION: a skipped manager counts as complete only when none of its upstream managers failed or is cycle-blocked; failed and cycle-blocked states propagate through skips to dependents with a fixed reason; test brew failed then uv skipped then Ruff. |
+| A7 (35-04) MEDIUM | The daily lookup is fixed at run start but writes sample the day after each outcome | DECISION: look up the daily record per entry at decision time with the injected clock; test midnight. |
+| A8 (35-04) MEDIUM | pnpm accounting is wider than self-update replay: an ordinary pnpm-owned `mmdc` update also submits Puppeteer in the same command | DECISION: document the grouped-package effect in the accepted limit (W6, SPEC amendment, threat entry); the tally counts planned tools only. |
+| T1 (35-05) HIGH | The shutdown test bypasses the runner's real stop sequence: production `_stop()` waits for the outer uv process then SIGKILLs the group as soon as it exits; if uv exits on SIGTERM before the installer finishes forwarding and cleanup, the installer is killed while the command's separate group continues; the inner cleanup has an uncapped `wait()` and no failure disposition when the group poll expires (`installer/helper_assets/schedule_runner.py:199-217,227-257`) | Real by the referee's reading; planner verifies. DECISION: drive the runner's real `_stop` in the test; give the installer's cleanup a hard cap and a defined failure disposition (kill the command group with SIGKILL, log a fixed line, exit failed); the runner's `_stop` waits for the installer's cleanup budget before it SIGKILLs the group; no uncapped waits. |
+| T2 (35-05) MEDIUM | Root timer entry still creates state before refusal: the stdlib entry has created and acquired the lock, written `start` and launched uv before `run_schedule` checks root | DECISION: refuse root in the stdlib runner for `update-all` before the lock, the `start` line and the launch; test no lock and no start line. |
+| T3 (35-05) MEDIUM | Manual-route queries still inherit stdin: `run_query` supplies neither `stdin=DEVNULL` nor a new session | DECISION: close stdin for the update-all queries (an injected query runner or a `stdin=DEVNULL` default where safe), else document the residual with a test. |
+| V1 (35-06) MEDIUM | A newer failed release lookup does not invalidate the preview's cached evidence (`checked_at` two days old plus a newer `failed_at`) | DECISION: the confirmation helper treats an entry whose `failed_at` is newer than its `checked_at` as unconfirmed in both run and preview; test it. |
+| V2 (35-06) MEDIUM | Preview can print `would update` for a receipt-drift tool the run refuses | DECISION: preview mirrors the drift refusal when it can be computed without writing, else adds a fixed note that drift refusals are decided at run time. |
+| N1 (35-07) LOW | The notifier fixture relies on scratch PATH, but the real probe can execute an absolute ownership path | DECISION: isolate the probe seam in that fixture. |
+| U1 (35-08) MEDIUM | The 80x20 promise omits an `n/a` row (two logical lines) and the longest status (four rows) | DECISION: test those two cases too, or state in the plan how the command is revealed there. |
+| U2 (35-08) MEDIUM | The amendments do not replace contradictory operative wording: the group claim, and the append-only SPEC amendment leaves constraints and the acceptance checklist saying preview changes nothing and every non-empty run notifies | DECISION: the executor-side edits rewrite the contradicting operative lines (dated, marked as amended) as well as appending; the group claim is reworded to say queries and the notifier are not in a command group. |
+| C1 (35-09) HIGH | An independent PyPI lookup can certify a rerun whose installer lookup failed: production uses `uv tool list --outdated`, a failed or unparseable report makes status unknown and omits the row | Real. DECISION: an omitted dependent needs the INSTALLER's own successful current evidence (the parsed outdated report that confirms the dependent is current); PyPI may add a cross-check, never replace it; otherwise `AGAIN_UNPROVEN`. |
+| C2 (35-09) MEDIUM | Route evidence measures the realpath of a symlinked declared leaf; the unit keeps the unresolved path; the transcript lacks the actual plan and shared-log lines | DECISION: record lstat and readlink of the declared leaf and measure it unresolved; keep the actual plan and shared-log result lines in the transcript. |
+| C3 (35-09) MEDIUM | The stubbed step test misses the environmental exit (`landing_step` exits 2 and later steps never emit skip markers) | DECISION: emit the skip markers on an environmental exit too and test it. |
+| G1 (35-10) MEDIUM | The gate SHA does not identify the container input (the harness streams tracked and untracked files; `setup.py` and the registry are not in the list) | DECISION: record HEAD plus a digest of the porcelain status (untracked included) with the transcript and add `setup.py` and `installer/registry.toml` to the invalidating paths. |
+| G2 (35-10) MEDIUM | The composition test leaves real seams live (platform detection, probes, notifier) | DECISION: isolate those seams in the composition fixture. |
+| G3 (35-10) LOW | The summary parity fixture truncates one repeated character, missing a cut right after a space | DECISION: add a multiword reason that is cut at a space boundary. |
+| X | Final gates with the default TMPDIR | Standing ruling; not raised. |
+
+## OpenCode Review (opencode-referee-one), cycle 3
+
+Using the plan-review checklist and Ponytail Review to assess all ten plans, with Codebase Memory and direct source reads to verify the proposed behavior. This is a read-only review: I won’t run updates, timers, notifications, or containers.
+The third revision improves the fixtures, but two safety claims are still unproven: a live PID in the lock file is not proof of a held lock, and the timeout test does not exercise the runner’s full stop sequence. I’m checking how those gaps affect the final sign-off.
+# Phase 35 plan review — convergence cycle 3
+
+**Verdict: revise before execution.** The current plans improve the off-by-default row, planner purity, receipt-safe preview, and container evidence. The remaining blockers are at the boundaries that authorize unattended changes: the child does not prove it holds the run lock, confirmed version evidence can authorize an update to a different installed copy, and the timeout test does not exercise the runner’s actual shutdown sequence. The container rerun can also pass without showing that the installer successfully checked Ruff.
+
+I reviewed the ten current plans against the repository source, assuming one developer’s machine with timers and manual commands sharing it. The findings below describe proposed behavior, not observed Phase 35 runtime failures.
+
+## 35-01
+
+**Summary:** Adds the opt-in 03:00 row, runner dispatch, lock handoff, and ninth-row layout.
+
+**Findings status:** The tracer now uses the runner’s actual arguments and checks the child’s lock path. The composed Policies check, stale-unit reconfiguration case, and portable disk check address the previous findings. The lock handoff is still not proven.
+
+**Strengths:** The per-row default changes only the undecided branch. Recorded on/off decisions still take their existing paths, and a distinct job kind avoids the per-tool missing-target cleanup (`installer/schedules.py:1561–1575`, `:1598–1638`, `:1704–1725`).
+
+**Concerns:**
+- **HIGH — Lock metadata is not proof of a lock handoff.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-01-PLAN.md:148–162`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-01-PLAN.md#L148) compares the supplied job and PID with `holder()`. That function reads text and checks whether the PID is alive; it neither checks the kernel lock nor ties the caller to the locker. An unrelated invocation naming the current `update-all` holder would still pass. The tests cover a wrong job, PID, or path, but not this case (`installer/runlock.py:56–98`).
+- **MEDIUM — The timer’s busy test can wait two hours.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-01-PLAN.md:149`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-01-PLAN.md#L149) asks for a held-lock test without specifying the wait seam. The runner immediately refuses an installer-held lock but waits on a scheduled holder; the existing test shortens both wait constants (`installer/helper_assets/schedule_runner.py:69–75`, `:266–299`; `tests/test_schedule_runner.py:734–747`).
+
+**Suggestions:** Use actual lock ownership or a verifiable handoff that survives the `uv` wrapper. Test matching metadata without a held lock and an unrelated caller naming a real same-job holder. Use the existing short-wait fixture for scheduled contention.
+
+**Risk Assessment:** Low for seeding and layout; high for mutual exclusion.
+
+## 35-02
+
+**Summary:** Defines the pure planner, manager order, owner groups, and exclusion rules.
+
+**Findings status:** The missing-evidence cask case and cycle propagation to managers owned by a cyclic branch are addressed in the planner. Plan 35-04 can still undo the cycle protection at execution time.
+
+**Strengths:** Ownership edges are the right input: `_RANK` ranks install methods, not installed owners. The plan supplies both required resolver callbacks and keeps dragged-in dependencies from becoming extra update targets (`installer/resolve.py:14–31`; `installer/ownership.py:82–97`; `installer/deps.py:40–55`, `:123–153`).
+
+**Concerns:**
+- **MEDIUM — The exact-refusal fixture uses a method that cannot be pinned by the real predicate.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-02-PLAN.md:178`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-02-PLAN.md#L178) calls for a pinned `github_release`. `pinned_method()` only recognizes `app` and `tarball`, so the requested fixture cannot produce the stated refusal (`installer/download.py:178–187`; `installer/update.py:315–321`).
+
+**Suggestions:** Use a real pinned tarball or app fixture. Keep the planner pure and carry its cycle disposition into the executor rather than rediscovering it there.
+
+**Risk Assessment:** Low for planner structure; medium for refusal and cycle coverage as composed.
+
+## 35-03
+
+**Summary:** Adds the daily record, link-safe run log, and deduplication for per-tool rows.
+
+**Findings status:** The plan now records known mutations followed by smoke, probe, or shim failure, and samples the record date after the update. Failed commands with unknown mutation effects remain a named limit. The batch’s midnight lookup is still open in 35-04.
+
+**Strengths:** The reader type-checks values before using them. The writer replaces the final directory entry rather than following a symlink, and log appends follow the existing nonblocking open and descriptor-type check pattern (`installer/atomic.py:58–73`, `:186–215`). The two smoke-check changes target calls that really occur after mutation (`installer/executors.py:573–614`; `installer/update.py:437–448`).
+
+**Concerns:**
+- **MEDIUM — The writer can save a record its own reader rejects.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-03-PLAN.md:155–157`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-03-PLAN.md#L155) caps reads but not serialized writes. A large enough valid daily record can be reported saved and then read as unhealthy-empty, losing all same-day evidence. The version-cache writer already enforces its cap before replacement (`installer/version_cache.py:221–245`).
+- **MEDIUM — The smoke failure test calls a helper that does not write the record.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-03-PLAN.md:142`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-03-PLAN.md#L142) invokes `_update_tool` and also expects a persisted record; the same plan leaves persistence to `_run_update_row` at lines 159–160. The existing schedule tests exercise the public dispatcher (`tests/test_schedule_update.py:306–332`).
+
+**Suggestions:** Enforce the byte cap before replacing the record and preserve the prior file on overflow. Drive the smoke test through the per-tool row, then verify that the batch skips the recorded tool.
+
+**Risk Assessment:** Medium. The file primitives are sound for the stated final-entry threat; the accounting tests need to prove the actual write path.
+
+## 35-04
+
+**Summary:** Runs managers and dependents in two passes, guards fresh ownership, and logs and records results.
+
+**Findings status:** The newer-manager-failure check and guarded Cursor skip address the previous cases. The second-pass fallback is narrower. The fresh-owner gate still does not bind version evidence to the target it mutates.
+
+**Strengths:** The guard sits inside `UpdateService`, before receipt checks, pnpm capture, and mutation, while preserving `run(target)` for existing callers. The backfill rule matches the refresh service: successful manager fields get the new stamp; failed fields can retain older data (`installer/update.py:660–722`; `installer/version_status.py:1768–1811`).
+
+**Concerns:**
+- **HIGH — A confirmed tool ID can authorize an update to a different copy.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-04-PLAN.md:146–150`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-04-PLAN.md#L146) confirms IDs, then checks the fresh owner only for exclusions, failures, and stage order. Ruff reported outdated by uv can switch to a Brew-owned copy before execution; if Brew completed, that copy can be upgraded without Brew evidence that it is outdated. Ruff has both routes, status is owner-specific, and dispatch uses the fresh owner (`installer/registry.toml:733–764`; `installer/version_status.py:662–710`; `installer/update.py:195–209`, `:660–714`).
+- **HIGH — Some skips erase a manager failure from the downstream decision.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-04-PLAN.md:147–150`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-04-PLAN.md#L147) marks every planner-skipped manager complete without checking its failed upstream. If Brew fails today, Brew-owned uv is skipped as already updated today, and Ruff’s owner and `requires` still point to uv, nothing records the failure inherited through uv. The same completion rule can authorize a manager whose fresh owner is on a cycle-blocked branch (`installer/registry.toml:733–741`; `installer/update.py:418–448`).
+- **MEDIUM — The batch’s daily lookup is fixed at run start.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-04-PLAN.md:148–150`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-04-PLAN.md#L148) samples the day once for skips but after each outcome for writes. A dependent recorded yesterday can still be skipped after midnight. The existing immediate post-result flow offers a clear per-entry decision point (`installer/schedule_run.py:50–68`).
+- **MEDIUM — The pnpm accounting limit is wider than self-update replay.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-04-PLAN.md:149–150`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-04-PLAN.md#L149) accounts for one planned tool per update, but an ordinary pnpm-owned `mmdc` update also submits Puppeteer in the same command. That peer can be current, unconfirmed, or recorded today (`installer/registry.toml:2804–2819`; `installer/executors.py:552–573`; `installer/update.py:432–436`).
+
+**Suggestions:** Bind confirmation to the owner and package or owning method that supplied it. Test a changed route with **both** managers successful. Distinguish policy skips from failure-blocked or cyclic managers, and carry the failure through skipped intermediate managers. Recheck the calendar day at dispatch. Keep the replay decision, but document and test the grouped-update limit too. Say **zero mutation argv**, not zero subprocesses: the existing path probes versions and resolves ownership before mutation (`installer/schedule_run.py:54–59`; `installer/version_status.py:1693–1714`).
+
+**Risk Assessment:** High. The proposed guard can still authorize an unattended update that the evidence or failure rules do not support.
+
+## 35-05
+
+**Summary:** Adds command bounds, signal forwarding, runner injection, and the root and refusal checks.
+
+**Findings status:** Dedicated command groups address the direct-child timeout problem. Root refusal now precedes lock acquisition in the installer child. Neither the complete timer shutdown nor root refusal before the timer’s own lock is established.
+
+**Strengths:** Passing the bounded runner to pnpm replay and herdr reload closes two existing bypasses without adding another updater (`installer/compose.py:347–374`, `:433–458`). The plan correctly treats the no-sudo scan as a regression check, not proof of vendor behavior (`installer/run.py:48–58`).
+
+**Concerns:**
+- **HIGH — The shutdown test bypasses the runner’s real stop sequence.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-05-PLAN.md:130,139`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-05-PLAN.md#L130) sends SIGTERM directly and checks afterward. Production `_stop()` waits for the **outer uv process**, then sends SIGKILL to its group as soon as that process exits. If uv exits on SIGTERM before the installer finishes forwarding and cleanup, the installer can be killed while its command’s separate group continues. The inner cleanup also contains an uncapped `wait()` and no specified failure disposition when the group poll expires (`installer/helper_assets/schedule_runner.py:199–217`, `:227–257`).
+- **MEDIUM — Root timer entry still creates state before refusal.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-05-PLAN.md:173–185`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-05-PLAN.md#L173) checks root inside `run_schedule`. The stdlib timer entry has already created and acquired the lock, written `start`, and launched uv by then (`installer/helper_assets/schedule_runner.py:289–309`, `:323–346`, `:522–545`).
+- **MEDIUM — Some manual-route queries still inherit stdin.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-05-PLAN.md:27–30`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-05-PLAN.md#L27) correctly lists separate query sites, but a timeout does not make those calls noninteractive. `run_query` supplies neither `stdin=DEVNULL` nor a new session, and production refresh uses it (`installer/run.py:449–472`; `installer/version_status.py:1278–1291`).
+
+**Suggestions:** Test the actual runner timeout with a wrapper that exits before the installer’s cleanup finishes. Make the real stop path wait for cleanup before releasing mutual exclusion. Reject root at both entry points, and close input for batch queries that can otherwise read from the manual caller’s terminal.
+
+**Risk Assessment:** High. The lock and process lifetime need to be proven together.
+
+## 35-06
+
+**Summary:** Adds a lock-free preview with the shared planner and held installer writes.
+
+**Findings status:** Preview now shares manager-evidence confirmation with the real run. The receipt and version-cache fixtures have positive controls. Two other reasons for preview/run disagreement remain.
+
+**Strengths:** `hold_writes()` fits the existing refresh service: it queues cache and snapshot saves, and adoption and retirement have explicit held paths (`installer/version_status.py:1328–1360`, `:1513–1528`, `:1575–1593`, `:2085–2104`).
+
+**Concerns:**
+- **MEDIUM — A newer failed release lookup does not invalidate the preview’s cached evidence.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-06-PLAN.md:122,134`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-06-PLAN.md#L122) shares the manager backfill check, but not an equivalent check for per-tool releases. A failed run refresh can retain a two-day-old `checked_at` and add a newer `failed_at`. Preview accepts the older date under seven days even though the run rejects it under twenty hours, and `fresh_ids()` only reads `checked_at` (`installer/version_status.py:396–442`; `installer/version_cache.py:248–267`; `installer/update_check.py:148–178`).
+- **MEDIUM — Equal version evidence does not establish equal skip reasons for receipt drift.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-06-PLAN.md:120,134`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-06-PLAN.md#L120) shares the refusal helper, but `UpdateService` has a separate installer-owned receipt-drift gate. Preview can print `would update` for a changed file that the run refuses, even though refresh already observed the drift (`installer/version_status.py:1513–1531`; `installer/update.py:670–687`; `tests/test_update.py:1849–1876`).
+
+**Suggestions:** Reject release evidence superseded by a failed lookup without changing the seven-day window for clean evidence. Use the pass’s receipt-drift evidence in preview, keeping the live recheck. Add a manager-snapshot positive control alongside the existing cache and receipt cases.
+
+**Risk Assessment:** Medium. The write boundary is credible; authorization and parity need tighter tests.
+
+## 35-07
+
+**Summary:** Attempts one desktop notification after a run with an update or failure.
+
+**Findings status:** The recorder now exercises production notifier construction. The `XDG_RUNTIME_DIR` limit is explicit, and delivery is described as an attempt.
+
+**Strengths:** Counts and registry IDs meet the adapter’s plain-text contract. The per-job bus variable uses the existing forwarding path without widening the global environment (`installer/notify.py:1–5`, `:79–104`, `:125–143`; `installer/helper_assets/schedule_runner.py:346–357`).
+
+**Concerns:**
+- **LOW — Isolate the notifier fixture at the probe seam too.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-07-PLAN.md:118`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-07-PLAN.md#L118) relies on scratch `PATH` to make probes inert. The real constructor wires the real probe, which can execute an absolute ownership path without looking at `PATH` (`setup.py:531–549`; `installer/version_status.py:472–494`, `:511–523`).
+
+**Suggestions:** Keep the real constructor and adapter, make `PATH` exclusive, and fake version-probe output explicitly. Preserve the scratch recorder as the only notification executable.
+
+**Risk Assessment:** Low. Actual desktop delivery remains owner UAT.
+
+## 35-08
+
+**Summary:** Adds the copyable preview to Schedules and records the operative contracts and limits.
+
+**Findings status:** The full-command rendered test and record-health qualification improve the earlier UI plan. The documentation still overstates what the runner and the daily record guarantee.
+
+**Strengths:** Testing the rendered widget rather than its uncut text matches the actual wrap-and-truncate path and the existing check-row visibility tests (`installer/schedules_screen.py:460–505`; `installer/ui_common.py:70–92`; `tests/test_schedules_view.py:929–951`).
+
+**Concerns:**
+- **MEDIUM — The 80×20 promise omits unavailable rows and the longest allowed status.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-08-PLAN.md:106–115`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-08-PLAN.md#L106) tests a healthy row with up to three status lines. An `n/a` row starts with two logical lines, and status can occupy four rows. Either can displace the command even though manual preview is still usable (`installer/schedules_screen.py:486–499`; `installer/ui_common.py:70–103`).
+- **MEDIUM — The amendments do not replace contradictory operative wording.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-08-PLAN.md:149–152`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-08-PLAN.md#L149) says every command has its own group, though queries and the notifier do not. Its append-only SPEC amendment also leaves the existing constraints and acceptance checklist saying preview changes nothing and every non-empty run notifies (`installer/run.py:449–472`; `installer/notify.py:93–101`, `:114–121`; `.planning/phases/35-opt-in-auto-update-package-managers-first/35-SPEC.md:86–108`).
+
+**Suggestions:** Assert the complete command on one rendered row in the promised states, or explicitly say how to reveal it. Put the qualified contracts in the operative SPEC and acceptance statements, not only in a later appendix. Scope the process-group claim to `update_all_runner` and distinguish cross-row deduplication from the retained six-hour cadence.
+
+**Risk Assessment:** Medium. The UI concern is discoverability; the documentation concern is promising protections the code does not provide.
+
+## 35-09
+
+**Summary:** Builds the disposable-container proof of standalone uv replacement, Ruff upgrade, and the same-day rerun.
+
+**Findings status:** The older seed, version-plus-hash check, route preconditions, evidence handoff, and gated steps materially improve the instrument. The rerun can still produce a false pass.
+
+**Strengths:** Requiring both the version and executable hash to change rejects a no-op. Reusing `runner_argv` and the unit environment tests the nested launch shape without claiming timer delivery; existing teardown verifies whether the named container is gone (`installer/schedules.py:864–914`; `scripts/container-e2e-verify.sh:2975–2993`).
+
+**Concerns:**
+- **HIGH — An independent PyPI lookup can certify a rerun whose installer lookup failed.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-09-PLAN.md:119,129`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-09-PLAN.md#L119) accepts an absent Ruff row when installed Ruff equals PyPI’s latest. Production uses `uv tool list --outdated`; a failed or unparseable report makes status unknown and also omits the row. The rerun would pass even though the installer never established that Ruff was current (`installer/manager_versions.py:129–157`, `:253–258`; `installer/version_status.py:662–709`, `:1079–1092`).
+- **MEDIUM — Route and transcript evidence still fall short of the claimed proof.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-09-PLAN.md:116–129`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-09-PLAN.md#L116) accepts realpath equality, including a symlinked declared leaf, then launches and hashes the canonical target. The unit retains the unresolved executable path, while the updater invokes the declared leaf. Replacing the leaf can leave the driver measuring the former target. The transcript should also retain the actual plan and shared-log results, not just derived verdict markers (`installer/schedules.py:728–733`, `:864–901`; `installer/update.py:512–555`; `scripts/container-e2e-verify.sh:3033–3057`).
+- **MEDIUM — The stubbed step test misses the environmental exit.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-09-PLAN.md:159–168`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-09-PLAN.md#L159) tests a step returning failure. The real `landing_step` exits 2 on a recognized environment failure, so later steps correctly do not run, but the loop never emits their skip markers (`scripts/container-e2e-verify.sh:3044–3057`).
+
+**Suggestions:** For an omitted Ruff row, require the rerun’s own fresh, valid uv inventory and outdated report, with no refresh fallback. Check installed Ruff also stays unchanged when explicitly skipped. Require a regular, non-symlink standalone leaf for this fixture, preflight the older uv’s actual outdated output through the production parser, and persist both runs’ evidence in a run-specific transcript. Pin the exit-2 behavior using the real `landing_step` over a fake driver.
+
+**Risk Assessment:** High for sign-off. `UNPROVEN`, `not run`, and a green host suite all leave AUTOUPD-08 open.
+
+## 35-10
+
+**Summary:** Checks production dispatch and composition, the summary budget, final gates, and the evidence handoff.
+
+**Findings status:** The separate dispatch and composition tests, same-tree gate pair, and long-ID cap address earlier findings. The composition still inherits the lock gap, and the container result is not yet bound to what the harness copied.
+
+**Strengths:** The reachability check starts from production entry points and follows runtime imports, so it tests wiring rather than merely checking file existence. The closeout also keeps the two final gates distinct and reruns them as a pair after repairs (`tests/test_reachability.py:115–162`, `:196–197`; `Makefile:60–64`).
+
+**Concerns:**
+- **MEDIUM — The gate SHA does not identify the container input.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-10-PLAN.md:27`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-10-PLAN.md#L27) records a gate SHA and lists selected invalidating paths. The harness streams tracked **and untracked** working-tree files; the list also omits exercised inputs such as `setup.py` and the registry. A green gate pair can therefore accompany a transcript from different inputs (`scripts/container-e2e-verify.sh:324–340`, `:3019–3028`; `setup.py:531–566`).
+- **MEDIUM — The composition test leaves real host seams live.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-10-PLAN.md:100`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-10-PLAN.md#L100) patches only service construction. Real Linux detection can fail under an empty scratch PATH, and the real constructor still wires version probes and the notifier (`installer/platform.py:43–79`; `setup.py:531–565`).
+- **LOW — The summary parity fixture misses a whitespace boundary.** [`.planning/phases/35-opt-in-auto-update-package-managers-first/35-10-PLAN.md:101`](.planning/phases/35-opt-in-auto-update-package-managers-first/35-10-PLAN.md#L101) truncates a single repeated character. A multiword reason can be cut immediately after a space; the manual route prints it, while the timer strips it (`.planning/phases/35-opt-in-auto-update-package-managers-first/35-01-PLAN.md:159`; `setup.py:560–566`; `installer/helper_assets/schedule_runner.py:363–376`).
+
+**Suggestions:** Record the container run’s own full SHA and transcript from a clean checkout, separately from the final gate SHA. Keep the real deps constructor but fake detection, probe output, and notification at their leaf seams. Add the actual-lock negatives from 35-01 and an exact-output case with a multiword reason cut at a space.
+
+**Risk Assessment:** Medium for closeout; high if the current composition test is treated as proof of mutual exclusion.
+
+## Cross-plan assessment
+
+1. **Fix mutual exclusion and shutdown together in 35-01, 35-05, and 35-10.** The same proof must hold through the real wrapper chain: a batch starts only under the lock, and that lock is not released while a command the runner is responsible for can still mutate.
+2. **Make authorization follow the installed copy in 35-02, 35-04, and 35-06.** Keep the pure planner and two passes. Bind evidence to the route that produced it, preserve failed and cycle-blocked states across stages, and distinguish planned tool counts from grouped package effects.
+3. **Keep the container proof separate from the implementation gates.** Require the actual replacement, the installer’s own successful Ruff evidence, and a transcript tied to the tested input. Do not use synthetic verdicts or a clean unit suite to close AUTOUPD-08.
+
+### Status: Issues Found — revise and re-review
+
+No files were changed. No tests, updaters, timers, notifications, or containers were run; actual uv replacement, shell-file effects, and desktop and timer delivery remain unverified.
