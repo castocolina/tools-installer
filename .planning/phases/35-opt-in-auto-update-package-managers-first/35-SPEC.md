@@ -59,7 +59,7 @@ A user who opts in gets their tools updated on a schedule in a safe order — pa
    - Target: a recorded container run of the plan and a real run on tools installed in the container.
    - Acceptance: a container log shows the plan, the order and the per-tool results; the `uv self update` finding is recorded in the phase verification with the command output; the container is removed afterwards.
 
-9. **Plan-only mode (added by the interview)**: `--run-schedule update-all --plan` prints what would be updated, in what order and what would be skipped with reasons, and changes nothing.
+9. **Plan-only mode (added by the interview)**: `--run-schedule update-all --plan` prints what would be updated, in what order and what would be skipped with reasons, and changes nothing. *(amended 2026-11-22, 35 orchestrator decision 2, needs confirmation: "changes nothing" reads "--plan writes no installer state: it still reads, takes no run lock and looks versions up read-only." (the wording W2 that plan 35-08 repeats verbatim); mechanism: plan mode holds the version-refresh writes (version cache, manager snapshot, receipt adoption and retirement) with `hold_writes()` and never commits them, and writes no log, record or notification)*
    - Current: n/a.
    - Target: a plan output from the same planner the real run uses.
    - Acceptance: the plan output equals the order and skip reasons of a real run on the same fixture; a spy on the update executor shows zero calls in plan mode.

@@ -79,7 +79,13 @@ from installer.run import (
     run_captured_in_group,
     run_git_isolated,
 )
-from installer.schedule_run import RunDeps, run_schedule, update_all_runner, update_all_stdin_closed
+from installer.schedule_run import (
+    RunDeps,
+    plan_update_all,
+    run_schedule,
+    update_all_runner,
+    update_all_stdin_closed,
+)
 from installer.schedules import SCHEDULE_DEFAULT_WAIT_SECONDS, ScheduleDefaultWarnings
 from installer.session import exit_code, ran_anything
 from installer.settings import (
@@ -530,9 +536,15 @@ def _verify_and_clean(
 
 
 def _schedule_run_deps(
-    tools: list[Tool], platform: Platform, *, runner: Runner = run_captured_in_group
+    tools: list[Tool],
+    platform: Platform,
+    *,
+    runner: Runner = run_captured_in_group,
+    hold_writes: bool = False,
 ) -> RunDeps:
     version_refresh, updates, _policy, _install = _build_services(tools, platform, runner=runner)
+    if hold_writes:
+        version_refresh.hold_writes()
     return RunDeps(
         tools=tools,
         updates=updates,
@@ -549,6 +561,15 @@ def _schedule_run_deps(
     )
 
 
+def _plan_schedule(options: Options) -> int:
+    tools = load_tools(_REGISTRY)
+    platform = detect()
+    lines, code = plan_update_all(_schedule_run_deps(tools, platform, hold_writes=True))
+    for line in lines:
+        print(line)
+    return code
+
+
 def _run_schedule(options: Options) -> int:
     """The headless timer route: no TTY, no repairs, exactly one plain result line."""
     with (
@@ -556,6 +577,8 @@ def _run_schedule(options: Options) -> int:
         if options.run_schedule == "update-all"
         else contextlib.nullcontext()
     ):
+        if options.plan:
+            return _plan_schedule(options)
         tools = load_tools(_REGISTRY)
         platform = detect()
         store, _needs_choice = _settings_store(options.link_mode)

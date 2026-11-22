@@ -144,6 +144,18 @@ class SequenceRefresher:
         return self.passes[min(max(len(self.calls) - 1, 0), len(self.passes) - 1)].get(tool_id)
 
 
+class WindowRefresher(SequenceRefresher):
+    def refresh(
+        self, tools: Sequence[Tool], *, stale_after: timedelta, on_failure: FailureSink | None
+    ) -> tuple[dict[str, ToolState], dict[str, VersionCacheEntry], ManagerSnapshot | None]:
+        cached, refreshed = self.passes
+        self.passes = [cached if stale_after >= timedelta(days=7) else refreshed]
+        try:
+            return super().refresh(tools, stale_after=stale_after, on_failure=on_failure)
+        finally:
+            self.passes = [cached, refreshed]
+
+
 @contextmanager
 def held_by_parent(context: schedules.ScheduleContext) -> Generator[int]:
     lock = runlock.try_acquire(context.lock_path, "update-all")

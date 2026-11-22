@@ -109,7 +109,31 @@ def test_parse_args_is_unchanged(capsys: pytest.CaptureFixture[str]) -> None:
         "--link-mode",
         "--run-schedule",
         "--parent-holds-run-lock",
+        "--plan",
     }
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        [],
+        ["--run-schedule", "update-claude"],
+        ["--run-schedule", "check-updates"],
+        ["--run-schedule", "update-all", "--parent-holds-run-lock"],
+    ],
+)
+def test_plan_rejects_invalid_routes(args: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        parse_args([*args, "--plan"])
+    assert error.value.code == 2
+    assert "--plan" in capsys.readouterr().err
+
+
+def test_plan_flag() -> None:
+    options = parse_args(["--run-schedule", "update-all", "--plan"])
+    assert options.plan and options.run_schedule == "update-all"
+    assert not parse_args([]).plan
+    assert not Options(all=False, categories=(), yes=False).plan
 
 
 def test_cli_run_schedule_accepts_the_update_check() -> None:

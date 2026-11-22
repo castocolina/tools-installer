@@ -20,7 +20,16 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import FrameType
 
-from installer import cursor_shim, runlock, schedules, update_all, update_all_state, update_check
+from installer import (
+    cursor_shim,
+    receipts,
+    runlock,
+    schedules,
+    update_all,
+    update_all_state,
+    update_check,
+    version_cache,
+)
 from installer.model import Tool
 from installer.notify import Notifier, no_notifier
 from installer.ownership import ManagerOwnership
@@ -409,7 +418,12 @@ def _confirmed(
             continue
         source = state.version.source
         if source not in MANAGER_SOURCES:
-            if tool_id in others:
+            entry = refresh_pass.entries.get(tool_id)
+            checked = stamp_time(entry.checked_at, now=now) if entry else None
+            failed = stamp_time(entry.failed_at, now=now) if entry else None
+            if tool_id in others and not (
+                failed is not None and checked is not None and failed > checked
+            ):
                 result.add(tool_id)
             continue
         snapshot = refresh_pass.snapshot
@@ -425,11 +439,56 @@ def _confirmed(
 def _refusal_evidence(
     tools: Sequence[Tool], states: Mapping[str, ToolState]
 ) -> dict[str, UpdateOutcome | None]:
-    return {
-        tool.id: update_refusal(tool, states[tool.id].ownership)
-        for tool in tools
-        if tool.id in states and states[tool.id].present
-    }
+    result: dict[str, UpdateOutcome | None] = {}
+    for tool in tools:
+        state = states.get(tool.id)
+        if state is None or not state.present:
+            continue
+        refusal = update_refusal(tool, state.ownership)
+        if (
+            refusal is None
+            and state.ownership.owner == "installer"
+            and (reason := receipts.CHANGED_SINCE_INSTALL) in state.reasons
+        ):
+            refusal = UpdateOutcome(
+                tool.id, "unsupported", "installer", f"{tool.id} is broken: {reason}"
+            )
+        result[tool.id] = refusal
+    return result
+
+
+def plan_update_all(deps: RunDeps) -> tuple[tuple[str, ...], int]:
+    """Preview the first-pass plan without writing installer state."""
+    if deps.refresh is None or deps.context is None:
+        return ("failed: update-all is not wired",), 2
+    try:
+        first = _refresh_pass(deps, stale_after=version_cache.STALE_AFTER)
+    except (CommandError, OSError):
+        return ("failed: refresh failed",), 1
+    recorded, _healthy = update_all_state.read_updated(schedules.updated_today_path(deps.context))
+    today = update_all_state.updated_on(recorded, deps.now().date())
+    refusals = _refusal_evidence(deps.tools, first.states)
+    entries = update_all.plan_managers(
+        deps.tools,
+        first.states,
+        platform_os=deps.context.platform_os,
+        updated_today=today,
+        refusals=refusals,
+    ) + update_all.plan_dependents(
+        deps.tools,
+        first.states,
+        outdated_ids(first.states.values()),
+        confirmed=_confirmed(deps, first, stale_after=version_cache.STALE_AFTER),
+        platform_os=deps.context.platform_os,
+        updated_today=today,
+        refusals=refusals,
+    )
+    updates = sum(entry.action == "update" for entry in entries)
+    return (
+        *map(update_all.plan_line, entries),
+        update_all.PLAN_NOTE,
+        update_all.plan_summary(updates, len(entries) - updates),
+    ), 0
 
 
 def _update_all(deps: RunDeps) -> tuple[str, int]:

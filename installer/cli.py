@@ -18,6 +18,7 @@ class Options:
     run_schedule: str | None = None
     parent_holds_run_lock: bool = False
     lock_holder_pid: int | None = None
+    plan: bool = False
 
 
 def parse_args(argv: list[str]) -> Options:
@@ -70,7 +71,21 @@ def parse_args(argv: list[str]) -> Options:
         help="internal: the schedule runner already holds the run lock",
     )
     parser.add_argument("--lock-holder-pid", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help=(
+            "print what update-all would update, in order, and write no installer state "
+            "(only with --run-schedule update-all)"
+        ),
+    )
     ns = parser.parse_args(argv)
+    if ns.plan and ns.run_schedule != "update-all":
+        parser.error("--plan is valid only with --run-schedule update-all")
+    if ns.plan and ns.parent_holds_run_lock:
+        parser.error(
+            "--plan takes no run lock, so it cannot be combined with --parent-holds-run-lock"
+        )
 
     categories: list[str] = []
     raw_groups: list[str] = ns.categories
@@ -90,4 +105,5 @@ def parse_args(argv: list[str]) -> Options:
         run_schedule=ns.run_schedule,
         parent_holds_run_lock=ns.parent_holds_run_lock,
         lock_holder_pid=ns.lock_holder_pid,
+        plan=ns.plan,
     )
