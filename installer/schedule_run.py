@@ -109,12 +109,16 @@ def _end_update_group(child: subprocess.Popen[str]) -> bool:
     return False
 
 
+class UpdateGroupSurvived(BaseException):
+    """Abort the batch when an update command group cannot be stopped."""
+
+
 def update_all_runner(
     cmd: list[str], *, timeout: float | None = update_all.COMMAND_TIMEOUT
 ) -> None:
     """Run a bounded command in its own session, with closed stdin and a copied child policy.
 
-    The group is ended and awaited on timeout or interruption; main-thread TERM and HUP
+    The group is ended and awaited on exit, timeout or interruption; main-thread TERM and HUP
     are forwarded through cleanup. Descendants starting new sessions can escape the group.
     Manager and postinstall queries, probes, version probes, pnpm list and bin, smoke
     checks, cursor model lists and GitHub lookups have their own bounds.
@@ -122,23 +126,17 @@ def update_all_runner(
     env = os.environ.copy()
     apply_child_env(env)
     env["UV_NO_MODIFY_PATH"] = "1"
-    try:
-        child = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            start_new_session=True,
-        )
-    except OSError as exc:
-        raise CommandError(cmd, 127, detail=str(exc)) from exc
+    env["HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK"] = "1"
+    child: subprocess.Popen[str] | None = None
+    pending = 0
+    cleaning = False
 
     def interrupted(signum: int, _frame: FrameType | None) -> None:
-        raise SystemExit(128 + signum)
+        nonlocal pending
+        if cleaning or child is None:
+            pending = signum
+        else:
+            raise SystemExit(128 + signum)
 
     previous: dict[signal.Signals, int | None | Callable[[int, FrameType | None], None]] = {}
     try:
@@ -146,18 +144,41 @@ def update_all_runner(
             for sig in (signal.SIGTERM, signal.SIGHUP):
                 previous[sig] = signal.signal(sig, interrupted)
         try:
+            try:
+                child = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                raise CommandError(cmd, 127, detail=str(exc)) from exc
+            if pending:
+                raise SystemExit(128 + pending)
             _, stderr = child.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            ended = _end_update_group(child)
-            detail = (
-                f"timed out after {timeout:g}s"
-                if ended and timeout is not None
-                else ("command group did not end after SIGKILL")
-            )
-            raise CommandError(cmd, TIMEOUT_CODE, detail=detail) from exc
-        except BaseException:
-            _end_update_group(child)
+            cleaning = True
+            if not _end_update_group(child):
+                raise UpdateGroupSurvived()
+        except BaseException as exc:
+            cleaning = True
+            if (
+                child is not None
+                and not isinstance(exc, UpdateGroupSurvived)
+                and not _end_update_group(child)
+            ):
+                raise UpdateGroupSurvived() from exc
+            if isinstance(exc, subprocess.TimeoutExpired) and timeout is not None:
+                raise CommandError(
+                    cmd, TIMEOUT_CODE, detail=f"timed out after {timeout:g}s"
+                ) from exc
             raise
+        if pending:
+            raise SystemExit(128 + pending)
         if child.returncode:
             raise CommandError(
                 cmd,
@@ -211,6 +232,8 @@ class ToolRun:
     line: str
     code: int
     mutated: bool
+    status: str = ""
+    replay_failed: bool = False
 
 
 class _BatchGuard:
@@ -222,6 +245,8 @@ class _BatchGuard:
         completed_managers: set[str],
         catalog: Sequence[Tool],
         evidence_owner: str,
+        *,
+        evidence: ManagerOwnership | None = None,
     ) -> None:
         self.tool = tool
         self.platform_os = platform_os
@@ -229,6 +254,7 @@ class _BatchGuard:
         self.completed_managers = completed_managers
         self.catalog = catalog
         self.evidence_owner = evidence_owner
+        self.evidence = evidence
         self.root: str | None = None
         self.refused = False
 
@@ -252,7 +278,16 @@ class _BatchGuard:
             and manager not in self.completed_managers
         ):
             reason = f"{manager} did not run first"
-        elif fresh.owner != self.evidence_owner:
+        elif fresh.owner != self.evidence_owner or (
+            self.evidence is not None
+            and (fresh.package, fresh.method, fresh.active_path, fresh.current_version)
+            != (
+                self.evidence.package,
+                self.evidence.method,
+                self.evidence.active_path,
+                self.evidence.current_version,
+            )
+        ):
             reason = "owner changed since the evidence"
         else:
             return None
@@ -281,7 +316,9 @@ def _update_tool(tool: Tool, deps: RunDeps, *, guard: GuardFn | None = None) -> 
     line, code = schedules.update_result_line(outcome, before, after)
     if outcome.receipt_warning:
         line += f"; warning: {_first_line(outcome.receipt_warning)}"
-    return ToolRun(line, code, outcome.mutated)
+    if outcome.replay_failed and guard is not None:
+        line += "; replay failed"
+    return ToolRun(line, code, outcome.mutated, outcome.status, outcome.replay_failed)
 
 
 def _update(
@@ -545,6 +582,7 @@ def _update_all(deps: RunDeps) -> tuple[str, int]:
                 completed,
                 deps.tools,
                 states[tool.id].ownership.owner,
+                evidence=states[tool.id].ownership,
             )
             if entry.action == "skip":
                 run = ToolRun(f"skipped: {entry.reason}", 0, False)
@@ -567,15 +605,17 @@ def _update_all(deps: RunDeps) -> tuple[str, int]:
                     else _update_tool(tool, deps, guard=guard)
                 )
                 if manager:
-                    if run.line.startswith("failed:"):
+                    if run.line.startswith("failed:") or run.replay_failed:
                         failed_managers[tool.id] = tool.id
+                        if run.replay_failed:
+                            clauses.append("replay failed")
                     elif guard.root is not None:
                         failed_managers[tool.id] = guard.root
-                    elif not guard.refused:
+                    elif not guard.refused and run.status != "unknown-owner":
                         completed.add(tool.id)
                     if run.mutated:
                         mutated_managers.add(tool.id)
-            if run.line.startswith("failed:"):
+            if run.line.startswith("failed:") or run.replay_failed:
                 failed.append(tool.id)
             elif run.line.startswith("skipped:"):
                 skipped += 1
@@ -627,15 +667,41 @@ def _update_all(deps: RunDeps) -> tuple[str, int]:
         )
         clauses.append("second refresh failed; dependents judged on the first pass")
     refusals = _refusal_evidence(deps.tools, chosen.states)
+    missing_blocked: list[update_all.PlanEntry] = []
+    for tool in deps.tools:
+        old = first.states.get(tool.id)
+        new = chosen.states.get(tool.id)
+        if (
+            tool.id in update_all.MANAGER_IDS
+            or old is None
+            or not old.present
+            or old.version is None
+            or old.version.outdated is not True
+            or new is None
+            or not new.present
+            or (new.version is not None and new.version.outdated is not None)
+        ):
+            continue
+        owner = update_all.owner_manager(old.ownership.owner)
+        root = update_all.blocking_manager(tool, owner, failed_managers, deps.tools)
+        if root is not None:
+            missing_blocked.append(
+                update_all.PlanEntry(
+                    tool.id, owner or old.ownership.owner, "skip", f"{root} failed", owner
+                )
+            )
     run_entries(
-        lambda day: update_all.plan_dependents(
-            deps.tools,
-            chosen.states,
-            outdated_ids(chosen.states.values()),
-            confirmed=confirmed,
-            platform_os=ctx.platform_os,
-            updated_today=today_map(day),
-            refusals=refusals,
+        lambda day: (
+            update_all.plan_dependents(
+                deps.tools,
+                chosen.states,
+                outdated_ids(chosen.states.values()),
+                confirmed=confirmed,
+                platform_os=ctx.platform_os,
+                updated_today=today_map(day),
+                refusals=refusals,
+            )
+            + tuple(missing_blocked)
         ),
         chosen.states,
     )
@@ -685,7 +751,10 @@ def _run_update_row(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, i
 
 def _run_unlocked(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, int]:
     if schedule.kind is schedules.JobKind.UPDATE_ALL:
-        return _update_all(deps)
+        try:
+            return _update_all(deps)
+        except UpdateGroupSurvived:
+            return "failed: command group did not end after SIGKILL", 1
     if schedule.kind is schedules.JobKind.CHECK_UPDATES:
         return _check(deps)
     return _run_update_row(schedule, deps)

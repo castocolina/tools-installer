@@ -501,6 +501,18 @@ def test_run_verdict() -> None:
         assert any("RUN_FAILED" in line for line in _run({**facts, **changes}))
 
 
+def test_first_run_record_requires_today_and_update_all_writer() -> None:
+    from datetime import date
+
+    today = date(2026, 11, 22)
+    entry = driver.update_all_state.UpdatedEntry
+    record = {name: entry(today, "update-all") for name in ("brew", "uv", "ruff")}
+    assert driver.valid_record_ids(record, today) == {"brew", "uv", "ruff"}
+    record["ruff"] = entry(date(2026, 11, 21), "update-all")
+    record["uv"] = entry(today, "update-uv")
+    assert driver.valid_record_ids(record, today) == {"brew"}
+
+
 def test_rc_finding() -> None:
     assert driver.rc_finding({"a": "1"}, {"a": "1"}) == "TRACER_UPDATE_ALL_RC_FINDING changed=none"
     assert driver.rc_finding({".bashrc": "a"}, {".bashrc": "b", ".zshrc": "c"}).endswith(
@@ -577,10 +589,11 @@ def test_evidence_round_trip_and_the_again_verdict() -> None:
 
     assert check() == "TRACER_UPDATE_ALL_AGAIN_OK"
     absent = [("brew", "skipped: updated today"), ("uv", "skipped: updated today")]
-    assert check(tool_lines=absent) == "TRACER_UPDATE_ALL_AGAIN_OK"
+    assert check(tool_lines=absent) == "TRACER_UPDATE_ALL_AGAIN_CURRENT detail=ruff already current"
     for changes in (
         {"outdated": None},
         {"inventory_ruff": None},
+        {"inventory_ruff": "0.14.0"},
         {"new_result_lines": ["ok: second refresh failed; dependents judged on the first pass"]},
     ):
         assert "AGAIN_UNPROVEN detail=installer evidence for ruff" in check(
@@ -602,7 +615,7 @@ def test_evidence_round_trip_and_the_again_verdict() -> None:
         check(
             tool_lines=[("uv", "skipped: updated today")], evidence={**evidence, "managers": ["uv"]}
         )
-        == "TRACER_UPDATE_ALL_AGAIN_OK"
+        == "TRACER_UPDATE_ALL_AGAIN_CURRENT detail=ruff already current"
     )
     assert driver.latest_version('{"info":{"version":"1.2.3"}}') == "1.2.3"
     for text in ("", "{}", "[]", '{"info":{"version":5}}'):

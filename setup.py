@@ -600,6 +600,9 @@ def _run_schedule(options: Options) -> int:
 def main(argv: list[str]) -> int:
     options = parse_args(argv)
     if options.run_schedule:
+        if options.run_schedule == "update-all" and os.geteuid() == 0:
+            print("failed: update-all refuses to run as root")
+            return 1
         return _run_schedule(options)
     console = Console()
     if options.doctor:

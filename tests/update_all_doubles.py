@@ -190,6 +190,9 @@ class SpyService(UpdateService):
     def run_guarded(
         self, target: UpdateTarget, guard: Callable[[ManagerOwnership], UpdateOutcome | None]
     ) -> UpdateOutcome:
+        outcome = self.outcomes.get(target.tool.id)
+        if outcome is not None and outcome.status == "unknown-owner":
+            return outcome
         refusal = guard(self.fresh.get(target.tool.id, target.ownership))
         return refusal if refusal is not None else self.run(target)
 

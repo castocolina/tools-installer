@@ -184,6 +184,7 @@ class UpdateOutcome:
     cleanup_warnings: tuple[str, ...] = ()
     receipt_warning: str | None = None
     mutated: bool = False
+    replay_failed: bool = False
 
 
 def resolve_update_argv(target: UpdateTarget, *, greedy: bool = False) -> list[str] | None:
@@ -734,10 +735,12 @@ class UpdateService:
         )
         detail = outcome.detail
         replayed: tuple[str, ...] = ()
+        replay_failed = False
         if outcome.status == "updated" and snapshot:
             try:
                 replayed = tuple(self._replay_globals(snapshot))
             except Exception as extra:  # noqa: BLE001 -- secondary mutation, never downgrades updated
+                replay_failed = True
                 warning = f"pnpm globals replay failed: {extra}"
                 detail = f"{detail}; {warning}" if detail else warning
         if outcome.status == "updated":
@@ -766,4 +769,6 @@ class UpdateService:
                 detail = f"{detail}; {warning}" if detail else warning
         if detail == outcome.detail and replayed == outcome.replayed_globals:
             return outcome
-        return replace(outcome, detail=detail, replayed_globals=replayed)
+        return replace(
+            outcome, detail=detail, replayed_globals=replayed, replay_failed=replay_failed
+        )

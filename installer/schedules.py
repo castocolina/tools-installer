@@ -486,6 +486,7 @@ def clean_unit_path(
     parts = [
         home / ".local/bin",
         pnpm_home,
+        pnpm_home / "bin",  # the standalone pnpm lives in $PNPM_HOME/bin (registry bin_dir)
         *(path for path in (*optional, brew) if is_dir(path)),
     ]
     # shortcut: a tool installed outside these dirs is not found by a scheduled run; upgrade by

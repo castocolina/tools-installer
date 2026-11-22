@@ -421,6 +421,7 @@ def test_clean_unit_path(tmp_path: Path) -> None:
     assert entries == [
         f"{home}/.local/bin",
         f"{home}/.local/share/pnpm",
+        f"{home}/.local/share/pnpm/bin",
         f"{home}/.volta/bin",
         f"{home}/.bun/bin",
         "/home/linuxbrew/.linuxbrew/bin",
@@ -446,6 +447,7 @@ def test_clean_unit_path_on_macos_and_with_pnpm_home(tmp_path: Path) -> None:
     assert macos == [
         f"{home}/.local/bin",
         f"{home}/Library/pnpm",
+        f"{home}/Library/pnpm/bin",
         "/opt/homebrew/bin",
         "/usr/local/bin",
         "/usr/bin",
@@ -456,7 +458,7 @@ def test_clean_unit_path_on_macos_and_with_pnpm_home(tmp_path: Path) -> None:
     pnpm = clean_unit_path(
         home, platform_os="debian", environ={"PNPM_HOME": "/opt/pnpm"}, is_dir=lambda _path: False
     ).split(":")
-    assert pnpm[1] == "/opt/pnpm"
+    assert pnpm[1:3] == ["/opt/pnpm", "/opt/pnpm/bin"]
     relative = clean_unit_path(
         home, platform_os="debian", environ={"PNPM_HOME": "pnpm"}, is_dir=lambda _path: False
     ).split(":")

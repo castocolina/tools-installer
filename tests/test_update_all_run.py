@@ -62,6 +62,21 @@ def notification_deps(
     )
 
 
+def test_surviving_command_group_aborts_the_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deps = notification_deps(tmp_path, monkeypatch, FakeNotifier())
+    calls: list[str] = []
+
+    def broken(tool: Tool, *_args: object, **_kwargs: object) -> schedule_run.ToolRun:
+        calls.append(tool.id)
+        raise schedule_run.UpdateGroupSurvived()
+
+    monkeypatch.setattr(schedule_run, "_update_tool", broken)
+    assert run_update_all(deps) == ("failed: command group did not end after SIGKILL", 1)
+    assert calls == ["brew"]
+
+
 def test_notification_text_is_counts_and_ids_only() -> None:
     assert update_all.notification(["a", "b"], []) == ("2 tools updated", "updated: a, b")
     assert update_all.notification(["a"], []) == ("1 tool updated", "updated: a")
@@ -244,8 +259,8 @@ def test_the_run_updates_managers_then_dependents_in_plan_order(
     states = {
         "brew": state(brew, "installer"),
         "uv": state(uv, "installer"),
-        "jq": state(jq, "brew", outdated=True),
-        "ruff": state(ruff, "uv", outdated=True),
+        "jq": state(jq, "brew", outdated=True, package="jq"),
+        "ruff": state(ruff, "uv", outdated=True, package="ruff"),
     }
     refresh = SequenceRefresher(tmp_path / "versions.json", [states], clock=lambda: now)
     service = SpyService()
@@ -424,6 +439,98 @@ def test_a_failing_manager_skips_each_dependent_with_one_line(
         ["yq", "skipped: brew failed"],
         ["ruff", "ok: updated"],
     ]
+
+
+def test_pnpm_replay_failure_is_reported_and_blocks_dependents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = check_context(tmp_path, monkeypatch)
+    now = datetime(2026, 11, 22, tzinfo=UTC)
+    pnpm, mmdc = (catalog_tool(name) for name in ("pnpm", "mmdc"))
+    states = {
+        "pnpm": state(pnpm, "installer"),
+        "mmdc": state(mmdc, "pnpm", outdated=True, method=mmdc.methods[0]),
+    }
+    service = SpyService(
+        {"pnpm": UpdateOutcome("pnpm", "updated", "installer", mutated=True, replay_failed=True)}
+    )
+    deps = run_deps(
+        [pnpm, mmdc],
+        context,
+        service=service,
+        owners={key: item.ownership for key, item in states.items()},
+        refresh=SequenceRefresher(tmp_path / "versions", [states], clock=lambda: now),
+        now=lambda: now,
+    )
+    line, code = run_update_all(deps)
+    assert code == 1 and "replay failed" in line
+    log = schedules.update_all_log_path(context).read_text()
+    assert "pnpm ok: updated; replay failed" in log
+    assert "mmdc skipped: pnpm failed" in log
+    records, _ = update_all_state.read_updated(schedules.updated_today_path(context))
+    assert "pnpm" in records and "mmdc" not in service.runs
+
+
+def test_real_pnpm_replay_failure_blocks_dependents_and_records_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = check_context(tmp_path, monkeypatch)
+    now = datetime(2026, 11, 22, tzinfo=UTC)
+    pnpm, mmdc = (catalog_tool(name) for name in ("pnpm", "mmdc"))
+    states = {
+        "pnpm": state(pnpm, "installer"),
+        "mmdc": state(mmdc, "pnpm", outdated=True, method=mmdc.methods[0]),
+    }
+    calls: list[list[str]] = []
+
+    def replay(_packages: object) -> tuple[str, ...]:
+        raise OSError("restore failed")
+
+    service = UpdateService(
+        platform=FEDORA,
+        runner=lambda argv: calls.append(argv),
+        managed_packages=lambda: ("mmdc",),
+        replay_globals=replay,
+        reresolve_ownership=lambda tool: states[tool.id].ownership,
+    )
+    deps = run_deps(
+        [pnpm, mmdc],
+        context,
+        service=service,
+        owners={key: item.ownership for key, item in states.items()},
+        refresh=SequenceRefresher(tmp_path / "versions", [states], clock=lambda: now),
+        now=lambda: now,
+    )
+    line, code = run_update_all(deps)
+    assert code == 1 and "replay failed" in line
+    log = schedules.update_all_log_path(context).read_text()
+    assert "pnpm ok: updated; replay failed" in log
+    assert "mmdc skipped: pnpm failed" in log
+    records, healthy = update_all_state.read_updated(schedules.updated_today_path(context))
+    assert healthy and set(records) == {"pnpm"}
+    assert calls == [["pnpm", "update"]]
+
+
+def test_unknown_owner_manager_does_not_authorize_dependents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = check_context(tmp_path, monkeypatch)
+    now = datetime(2026, 11, 22, tzinfo=UTC)
+    uv, ruff = (catalog_tool(name) for name in ("uv", "ruff"))
+    states = {"uv": state(uv, "installer"), "ruff": state(ruff, "uv", outdated=True)}
+    service = SpyService({"uv": UpdateOutcome("uv", "unknown-owner", "unknown", "unknown")})
+    deps = run_deps(
+        [uv, ruff],
+        context,
+        service=service,
+        owners={key: item.ownership for key, item in states.items()},
+        refresh=SequenceRefresher(tmp_path / "versions", [states], clock=lambda: now),
+        now=lambda: now,
+    )
+    assert run_update_all(deps) == ("ok: 0 updated, 2 skipped", 0)
+    log = schedules.update_all_log_path(context).read_text()
+    assert "ruff skipped: uv did not run first" in log
+    assert "ruff" not in service.runs
 
 
 def test_a_manager_owned_by_a_failed_manager_and_a_requires_chain_cascade(
@@ -743,9 +850,9 @@ def test_evidence_owner_comes_from_the_selected_pass(
     first = {
         "brew": state(brew, "installer"),
         "uv": state(uv, "installer"),
-        "ruff": state(ruff, "uv", outdated=True),
+        "ruff": state(ruff, "uv", outdated=True, package="ruff"),
     }
-    second = {**first, "ruff": state(ruff, "brew", outdated=True)}
+    second = {**first, "ruff": state(ruff, "brew", outdated=True, package="ruff")}
     service = SpyService()
     service.fresh["ruff"] = owned(ruff, "brew" if fresh_owner == "brew" else "uv", package="ruff")
     deps = run_deps(
@@ -777,6 +884,18 @@ def test_evidence_owner_comes_from_the_selected_pass(
     else:
         assert "ruff skipped: owner changed since the evidence" in log
         assert service.runs == ["brew", "uv"] and "ruff" not in records
+
+
+@pytest.mark.parametrize("change", ["package", "method", "active_path"])
+def test_guard_rejects_changed_target_under_same_owner(change: str) -> None:
+    tool = catalog_tool("ruff")
+    evidence = owned(tool, "uv", package="ruff", method=tool.methods[0])
+    values = {"package": "other", "method": None, "active_path": Path("/other/ruff")}
+    fresh = replace(evidence, **{change: values[change]})
+    guard_class = vars(schedule_run)["_BatchGuard"]
+    guard = guard_class(tool, "fedora", {}, {"uv"}, [tool], "uv", evidence=evidence)
+    result = guard(fresh)
+    assert result is not None and result.detail == "owner changed since the evidence"
 
 
 def test_the_guard_judges_the_fresh_ownership() -> None:
@@ -1080,6 +1199,79 @@ def test_real_refresh_partial_manager_failure_confirms_only_the_answering_manage
         result.states["ruff"].version is not None and result.states["ruff"].version.source == "uv"
     )
     assert vars(schedule_run)["_confirmed"](deps, result) == frozenset({"ruff"})
+
+
+def test_failed_manager_partial_refresh_logs_first_pass_dependents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = check_context(tmp_path, monkeypatch)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-path"))
+    now = datetime(2026, 11, 22, tzinfo=UTC)
+    brew = catalog_tool("brew")
+    jq = Tool(
+        id="jq",
+        name="jq",
+        category="search",
+        cmd="jq",
+        methods=(Method(kind="brew", params={"formula": "jq"}),),
+    )
+    inventory = ManagerInventory(
+        brew_formulae={"jq": "1.0"},
+        brew_casks={},
+        pnpm_globals=frozenset(),
+        uv_tools={},
+        brew_prefix=tmp_path / "brew",
+    )
+    outdated = OutdatedReport(brew={"jq": ManagerVersion("1.0", "2.0")}, cask={}, pnpm={}, uv={})
+    answers = [outdated, replace(outdated, brew=None)]
+
+    def read_inventory(**_kwargs: object) -> ManagerInventory:
+        return inventory
+
+    def read_outdated(**_kwargs: object) -> OutdatedReport:
+        return answers.pop(0)
+
+    refresh = VersionRefreshService(
+        platform=Platform(os="macos", arch="amd64", immutable=False, has_brew=True),
+        cache_path=tmp_path / "versions",
+        now=lambda: now,
+        home=tmp_path,
+        managed_bin_dir=tmp_path / "bin",
+        which=lambda cmd: str(tmp_path / "brew/bin" / cmd) if cmd in ("jq", "brew") else None,
+        artifacts_for=lambda _tool: [],
+        read_inventory_fn=read_inventory,
+        read_outdated_fn=read_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        bun_versions=lambda: {},
+        query=lambda *_args, **_kwargs: "",
+        probe_output=lambda _argv: "1.0",
+    )
+    updates = SpyService({"brew": UpdateOutcome("brew", "failed", "installer", "boom")})
+    owners = {"brew": owned(brew, "installer"), "jq": owned(jq, "brew", package="jq")}
+
+    def resolve(tool: Tool, **_kwargs: object) -> ManagerOwnership:
+        return owners[tool.id]
+
+    def present(_tool: Tool) -> bool:
+        return True
+
+    monkeypatch.setattr(refresh, "_resolve_owner_from", resolve)
+    monkeypatch.setattr(refresh, "_present", present)
+    original_run = updates.run
+
+    def fail_and_invalidate(target: UpdateTarget) -> UpdateOutcome:
+        result = original_run(target)
+        refresh.invalidate(reason="failed")
+        return result
+
+    monkeypatch.setattr(updates, "run", fail_and_invalidate)
+    deps = run_deps(
+        [brew, jq], context, service=updates, owners=owners, refresh=refresh, now=lambda: now
+    )
+    assert run_update_all(deps) == ("failed: 1 failed (brew), 0 updated, 1 skipped", 1)
+    assert updates.runs == ["brew"]
+    assert "jq skipped: brew failed" in schedules.update_all_log_path(context).read_text()
 
 
 def test_guard_precedes_receipts_capture_and_mutation(

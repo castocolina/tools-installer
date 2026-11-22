@@ -6,14 +6,12 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
 
 import pytest
 
 import installer.update_all as planner
 from installer.deps import Resolution, resolve_dependencies
 from installer.model import Method, Tool, load_tools
-from installer.ownership import ManagerOwnership
 from installer.update import UpdateOutcome, update_refusal
 from installer.version_status import ToolState, outdated_ids
 from tests.state_doubles import MACOS
@@ -134,10 +132,16 @@ def test_an_ownership_cycle_is_skipped_beside_an_independent_manager() -> None:
         ("skip", "manager ownership cycle"),
         ("skip", "owner is in a manager ownership cycle"),
         ("skip", "owner is in a manager ownership cycle"),
-        ("update", ""),
+        ("skip", "uv did not run first"),
     ]
     assert all(e.group == "managers" for e in entries[:5])
     assert plans([uv], states_of(state(uv, "uv")))[0].action == "update"
+
+
+def test_absent_manager_blocks_dependent_preview() -> None:
+    ruff = catalog_tool("ruff")
+    entry = plans([ruff], states_of(state(ruff, "uv", outdated=True)))[0]
+    assert planner.plan_line(entry) == "ruff: skipped: uv did not run first"
 
 
 def test_a_requires_cycle_skips_that_group_and_nothing_else() -> None:
@@ -364,10 +368,10 @@ def test_a_macos_cask_is_excluded_and_a_formula_is_planned() -> None:
     )
     assert [(e.tool_id, e.action, e.reason) for e in entries] == [
         ("app", "skip", "cask excluded"),
-        ("formula", "update", ""),
+        ("formula", "skip", "brew did not run first"),
     ]
     assert planner.plan_line(entries[0]) == "app: skipped: cask excluded"
-    assert batch([cask], states)[0].action == "update"
+    assert batch([cask], states)[0].reason == "brew did not run first"
 
 
 def test_refusals_use_the_per_tool_row_text(
@@ -415,8 +419,12 @@ def test_refusals_use_the_per_tool_row_text(
 def test_refusal_evidence_is_an_input_and_nothing_spawns(monkeypatch: pytest.MonkeyPatch) -> None:
     a, b, c, d = (catalog_tool(x) for x in ("a", "b", "c", "d"))
     states = states_of(state(a, "brew"), state(b, "brew"), state(c, "cask"), state(d, "installer"))
-    assert all(e.action == "update" for e in batch([a, b, c, d], states))
-    states["d"] = replace(states["d"], ownership=cast(ManagerOwnership, None))
+    assert {e.tool_id: e.action for e in batch([a, b, c, d], states)} == {
+        "a": "skip",
+        "b": "skip",
+        "c": "skip",
+        "d": "update",
+    }
 
     def fail(*args: object, **kwargs: object) -> None:
         raise AssertionError((args, kwargs))
@@ -425,10 +433,10 @@ def test_refusal_evidence_is_an_input_and_nothing_spawns(monkeypatch: pytest.Mon
     monkeypatch.setattr(subprocess, "run", fail)
     entries = batch([a, b, c, d], states, platform_os="macos", refusals={"a": None, "d": None})
     assert {e.tool_id: (e.action, e.reason) for e in entries} == {
-        "a": ("update", ""),
+        "a": ("skip", "brew did not run first"),
         "b": ("skip", "refusal not evaluated"),
         "c": ("skip", "cask excluded"),
-        "d": ("skip", "refusal not evaluated"),
+        "d": ("update", ""),
     }
 
 

@@ -16,15 +16,18 @@ import time
 import urllib.request
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal, cast
 
 import installer
 from installer import manager_versions, schedules, status, update_all_state
 from installer import platform as host_platform
+from installer.compose import _build_services
 from installer.model import load_tools
 from installer.run import CommandError, run_query
+from installer.version_status import probed_version
+from installer.versions import probe_version_output
 from tests.e2e_landing_driver import (
     Failed,
     first_line,
@@ -166,6 +169,12 @@ def route_verdict(
     else:
         return f"TRACER_UPDATE_ALL_ROUTE_OK leaf={declared_leaf}"
     return f"TRACER_UPDATE_ALL_UV_UNPROVEN detail=route {detail}"
+
+
+def valid_record_ids(record: Mapping[str, update_all_state.UpdatedEntry], today: date) -> set[str]:
+    return {
+        name for name, entry in record.items() if entry.day == today and entry.by == "update-all"
+    }
 
 
 def run_verdict(
@@ -336,6 +345,8 @@ def again_verdict(
         or "second refresh failed; dependents judged on the first pass" in new_result_lines[0]
     ):
         return "TRACER_UPDATE_ALL_AGAIN_UNPROVEN detail=installer evidence for ruff"
+    if "ruff" not in tools:
+        return "TRACER_UPDATE_ALL_AGAIN_CURRENT detail=ruff already current"
     return "TRACER_UPDATE_ALL_AGAIN_OK"
 
 
@@ -551,7 +562,9 @@ def _run(home: Path) -> list[str]:
     run_lines = _lines(schedules.update_all_log_path(ctx))
     tools = _tools(run_lines)
     record, healthy = update_all_state.read_updated(schedules.updated_today_path(ctx))
-    ids = list(record) if healthy else []
+    ids: set[str] = (
+        valid_record_ids(record, datetime.now().astimezone().date()) if healthy else set()
+    )
     after, hash_after, ruff_after, rc_after = (
         _version(uv),
         hashlib.sha256(Path(uv).read_bytes()).hexdigest(),
@@ -622,6 +635,10 @@ def _again(_home: Path) -> list[str]:
 
     outdated = manager_versions.uv_tool_outdated(query=query)
     inventory = _ruff(uv)
+    tools = load_tools(Path(installer.__file__).parent / "registry.toml")
+    refresh, _updates, _policy, _install = _build_services(tools, host_platform.detect())
+    ruff = tool_by_id("ruff")
+    ruff_now = probed_version(ruff, refresh.resolve_owner(ruff), probe_version_output)
     try:
         with urllib.request.urlopen("https://pypi.org/pypi/ruff/json", timeout=20) as response:
             latest = latest_version(response.read().decode("utf-8"))
@@ -636,7 +653,7 @@ def _again(_home: Path) -> list[str]:
             results,
             _tools(logs),
             evidence,
-            inventory,
+            ruff_now,
             outdated,
             inventory,
             latest,

@@ -384,6 +384,7 @@ def test_the_update_all_runner_bounds_closes_stdin_and_sets_the_environment(
 checks = [os.environ.get('HOMEBREW_NO_SUDO') == '1',
           os.environ.get('HOMEBREW_NO_AUTOREMOVE') == '1',
           os.environ.get('UV_NO_MODIFY_PATH') == '1',
+          os.environ.get('HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK') == '1',
           'SUDO_ASKPASS' not in os.environ,
           os.environ.get('PATH') == sys.argv[1], os.environ.get('HOME') == sys.argv[2],
           sys.stdin.read() == '', os.getsid(0) == os.getpid()]
@@ -566,9 +567,10 @@ def test_the_cleanup_is_capped_and_reports_a_group_that_survives(
     monkeypatch.setattr(update_all, "KILL_GRACE", 0.2)
     started = time.monotonic()
     try:
-        with pytest.raises(CommandError) as error:
+        from installer.schedule_run import UpdateGroupSurvived
+
+        with pytest.raises(UpdateGroupSurvived):
             update_all_runner([sys.executable, "-c", "import time; time.sleep(60)"], timeout=0.5)
-        assert "did not end after SIGKILL" in error.value.detail
         assert time.monotonic() - started < 5
         assert capsys.readouterr().err == "update-all: a command group did not end after SIGKILL\n"
     finally:
@@ -656,6 +658,81 @@ def test_a_command_that_times_out_leaves_no_helper_behind_the_unlock(
                 with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.kill(int(path.read_text()), signal.SIGKILL)
         thread.join(45)
+
+
+def test_signal_during_spawn_cleans_up_the_new_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    import signal
+    import subprocess
+
+    real_popen = subprocess.Popen
+
+    def spawn(args: list[str], **kwargs: object) -> subprocess.Popen[str]:
+        del kwargs
+        handler = signal.getsignal(signal.SIGTERM)
+        assert callable(handler)
+        handler(signal.SIGTERM, None)
+        return real_popen(args, text=True, start_new_session=True)
+
+    monkeypatch.setattr(subprocess, "Popen", spawn)
+    with pytest.raises(SystemExit) as error:
+        update_all_runner([sys.executable, "-c", "import time; time.sleep(60)"])
+    assert error.value.code == 128 + signal.SIGTERM
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_runner_ends_descendants_after_exit_or_repeated_signal(
+    tmp_path: Path, interrupt: bool
+) -> None:
+    import contextlib
+    import signal
+    import subprocess
+    import time
+
+    pidfile = tmp_path / "descendant"
+    script = f"trap '' TERM; sleep 60 </dev/null >/dev/null 2>&1 & echo $! > {pidfile}; " + (
+        "wait" if interrupt else "exit 0"
+    )
+    script_path = tmp_path / "child.sh"
+    script_path.write_text(script)
+    driver = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from installer.schedule_run import update_all_runner; "
+            f"update_all_runner(['sh', {str(script_path)!r}])",
+        ],
+        start_new_session=True,
+    )
+    pid = 0
+    try:
+        deadline = time.monotonic() + 10
+        while not pidfile.exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        pid = int(pidfile.read_text())
+        if interrupt:
+            os.kill(driver.pid, signal.SIGTERM)
+            time.sleep(0.3)
+            os.kill(driver.pid, signal.SIGTERM)
+        driver.wait(timeout=15)
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                os.kill(pid, 0)
+                stat = Path(f"/proc/{pid}/stat")
+                if stat.exists() and stat.read_text().split()[2] == "Z":
+                    break
+            except ProcessLookupError:
+                break
+            assert time.monotonic() < deadline, "descendant survived"
+            time.sleep(0.05)
+    finally:
+        if pid:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+        if driver.poll() is None:
+            os.killpg(driver.pid, signal.SIGKILL)
+        driver.wait(timeout=5)
 
 
 def test_update_all_refuses_root_before_any_lock_refresh_or_mutation(
@@ -964,18 +1041,23 @@ def test_no_privilege_escalation_in_the_new_code() -> None:
     """Prove these modules name no escalator, not that vendor tools cannot escalate."""
     import ast
 
-    root = Path(__file__).resolve().parent.parent / "installer"
+    root = Path(__file__).resolve().parent.parent
     paths = [
         root / name
         for name in (
-            "update_all.py",
-            "update_all_state.py",
-            "schedule_run.py",
-            "helper_assets/schedule_runner.py",
+            "installer/update_all.py",
+            "installer/update_all_state.py",
+            "installer/schedule_run.py",
+            "installer/helper_assets/schedule_runner.py",
+            "installer/update.py",
+            "installer/executors.py",
+            "installer/run.py",
+            "installer/compose.py",
+            "setup.py",
         )
     ]
     forbidden = {"sudo", "pkexec", "doas"}
-    assert len(paths) == 4
+    assert len(paths) == 9
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         docstrings = {
@@ -987,7 +1069,18 @@ def test_no_privilege_escalation_in_the_new_code() -> None:
             and isinstance(node.body[0].value, ast.Constant)
             and isinstance(node.body[0].value.value, str)
         }
+        # Manual handoff table is display-only; never treat its text as executable argv.
+        handoffs = {
+            id(child)
+            for assignment in ast.walk(tree)
+            if isinstance(assignment, ast.AnnAssign)
+            and isinstance(assignment.target, ast.Name)
+            and assignment.target.id == "_MANUAL_COMMANDS"
+            for child in ast.walk(assignment)
+        }
         for node in ast.walk(tree):
+            if id(node) in handoffs:
+                continue
             if (
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
@@ -998,7 +1091,26 @@ def test_no_privilege_escalation_in_the_new_code() -> None:
                 first = node.elts[0]
                 if isinstance(first, ast.Constant) and isinstance(first.value, str):
                     assert first.value.lower() not in forbidden
-    assert "homebrew_no_sudo" not in forbidden
+    from installer.run import apply_child_env
+
+    env: dict[str, str] = {}
+    apply_child_env(env)
+    assert env["HOMEBREW_NO_SUDO"] == "1"
+
+
+@pytest.mark.parametrize("extra", [[], ["--plan"]])
+def test_cli_refuses_root_before_dependencies(
+    extra: list[str], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("dependencies must not be read")
+
+    monkeypatch.setattr(setup, "load_tools", forbidden)
+    monkeypatch.setattr(setup, "_settings_store", forbidden)
+    assert setup.main(["--run-schedule", "update-all", *extra]) == 1
+    assert capsys.readouterr().out == "failed: update-all refuses to run as root\n"
 
 
 def test_children_run_with_the_house_policy_through_the_real_service(

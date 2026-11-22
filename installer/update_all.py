@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal
 
 from installer import schedules
 from installer.deps import DependencyCycleError, resolve_dependencies
@@ -87,7 +87,6 @@ def summary_line(
 # Managers are catalog tools named by an Owner value, not a registry category.
 MANAGER_IDS: Final[tuple[str, ...]] = ("brew", "uv", "bun", "pnpm", "sdkman", "volta")
 GROUP_MANAGERS = "managers"
-GROUP_INSTALLER = "installer"
 SKIP_MANAGER_CYCLE = "manager ownership cycle"
 SKIP_CYCLE_BLOCKED = "owner is in a manager ownership cycle"
 SKIP_DEPENDENCY_CYCLE = "dependency cycle"
@@ -121,7 +120,7 @@ def owner_manager(owner: str) -> str | None:
 
 
 def _manager_order(
-    tools: Sequence[Tool], states: Mapping[str, ToolState | None]
+    tools: Sequence[Tool], states: Mapping[str, ToolState]
 ) -> tuple[list[str], set[str], set[str]]:
     present = {
         tool.id
@@ -131,10 +130,7 @@ def _manager_order(
     edges: dict[str, str] = {}
     for tool_id in present:
         state = states[tool_id]
-        if state is None:
-            continue
-        ownership = cast("ManagerOwnership | None", state.ownership)
-        owner = owner_manager(ownership.owner) if ownership is not None else None
+        owner = owner_manager(state.ownership.owner)
         if owner is not None and owner in present and owner != tool_id:
             edges[tool_id] = owner
     cyclic: set[str] = set()
@@ -180,11 +176,11 @@ def exclusion(
 
 
 def blocking_manager(
-    tool: Tool, owner_manager: str | None, failed: Mapping[str, str], catalog: Sequence[Tool]
+    tool: Tool, owner: str | None, failed: Mapping[str, str], catalog: Sequence[Tool]
 ) -> str | None:
     """Find the first failed owner or dependency; skipped managers are not keys in failed."""
-    if owner_manager is not None and owner_manager in failed:
-        return failed[owner_manager]
+    if owner is not None and owner in failed:
+        return failed[owner]
     by_id = {item.id: item for item in catalog}
     visited = {tool.id}
 
@@ -215,9 +211,7 @@ def _decide(
     confirmed: Collection[str] | None,
 ) -> tuple[Literal["update", "skip"], str]:
     """Check ownership, exclusion, today's updates, then confirmation in that order."""
-    ownership = cast("ManagerOwnership | None", state.ownership)
-    if ownership is None:
-        return "skip", SKIP_NOT_EVALUATED
+    ownership = state.ownership
     if tool.id not in refusals:
         reason = exclusion(platform_os, ownership, None)
         return "skip", SKIP_CASK if reason == SKIP_CASK else SKIP_NOT_EVALUATED
@@ -233,7 +227,7 @@ def _decide(
 
 def plan_managers(
     tools: Sequence[Tool],
-    states: Mapping[str, ToolState | None],
+    states: Mapping[str, ToolState],
     *,
     platform_os: str,
     updated_today: Collection[str],
@@ -245,8 +239,6 @@ def plan_managers(
     entries: list[PlanEntry] = []
     for tool_id in order:
         state = states[tool_id]
-        if state is None:
-            continue
         if tool_id in cyclic:
             action, reason = "skip", SKIP_MANAGER_CYCLE
         elif tool_id in blocked:
@@ -260,14 +252,13 @@ def plan_managers(
                 refusals=refusals,
                 confirmed=None,
             )
-        ownership = cast("ManagerOwnership | None", state.ownership)
         entries.append(
             PlanEntry(
                 tool_id,
                 GROUP_MANAGERS,
                 action,
                 reason,
-                owner_manager(ownership.owner) if ownership is not None else None,
+                owner_manager(state.ownership.owner),
             )
         )
     return tuple(entries)
@@ -275,7 +266,7 @@ def plan_managers(
 
 def plan_dependents(
     tools: Sequence[Tool],
-    states: Mapping[str, ToolState | None],
+    states: Mapping[str, ToolState],
     outdated: Collection[str],
     *,
     confirmed: Collection[str],
@@ -284,7 +275,7 @@ def plan_dependents(
     refusals: Mapping[str, UpdateOutcome | None],
 ) -> tuple[PlanEntry, ...]:
     """Plan outdated dependents by owner and dependency order."""
-    order, _, _ = _manager_order(tools, states)
+    order, cyclic, blocked = _manager_order(tools, states)
     groups: dict[str | None, list[Tool]] = {}
     for tool in tools:
         state = states.get(tool.id)
@@ -294,8 +285,7 @@ def plan_dependents(
             and state is not None
             and state.present
         ):
-            ownership = cast("ManagerOwnership | None", state.ownership)
-            owner = owner_manager(ownership.owner) if ownership is not None else None
+            owner = owner_manager(state.ownership.owner)
             groups.setdefault(owner, []).append(tool)
     other_managers = sorted(group for group in groups if group is not None and group not in order)
     entries: list[PlanEntry] = []
@@ -315,14 +305,7 @@ def plan_dependents(
             cycle = True
         for tool in ordered:
             state = states[tool.id]
-            if state is None:
-                continue
-            ownership = cast("ManagerOwnership | None", state.ownership)
-            label = (
-                group
-                if group is not None
-                else (ownership.owner if ownership is not None else "unknown")
-            )
+            label = group if group is not None else state.ownership.owner
             if cycle:
                 action, reason = "skip", SKIP_DEPENDENCY_CYCLE
             else:
@@ -334,6 +317,12 @@ def plan_dependents(
                     refusals=refusals,
                     confirmed=confirmed,
                 )
+                if (
+                    action == "update"
+                    and group is not None
+                    and (group not in order or group in cyclic or group in blocked)
+                ):
+                    action, reason = "skip", f"{group} did not run first"
             entries.append(PlanEntry(tool.id, label, action, reason, group))
     return tuple(entries)
 
