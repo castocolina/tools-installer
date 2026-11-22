@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from rich.cells import cell_len
 from textual.containers import Vertical
+from textual.geometry import Region
 from textual.widgets import DataTable, Input, Label, OptionList, Select, Static
 
 from installer import runlock, schedules, schedules_screen, wizard_app
@@ -840,6 +841,144 @@ async def test_e_is_refused_before_the_modal_and_again_at_the_pick(
         assert (screen.status.text, screen.status.severity) == (_REMOVAL_REFUSAL, Severity.WARN)
         assert timer_of(env).read_bytes() == before
         app.end_mutation()
+
+
+_SHORT_CHECK_LIMITS = "limits: any run may notify; empty resets silently; ok is not delivery"
+
+
+async def test_the_check_row_target_cell_reads_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    app = make_app(env, monkeypatch, context=with_which(env, ("pnpm",)))
+    async with app.run_test(size=(80, 20)) as pilot:
+        await open_schedules(app, pilot)
+        assert cell(app, "check-updates", "target") == "installed"
+        assert cell(app, "update-claude", "target") == "claude"
+        assert cell(app, "cache-cleanup", "target") == "uv pnpm"
+
+
+def assert_check_limits(lines: list[str]) -> None:
+    label = next(i for i, line in enumerate(lines) if line.startswith("update check is "))
+    short = lines.index(_SHORT_CHECK_LIMITS)
+    last = next(i for i, line in enumerate(lines) if line.startswith("last:"))
+    times = next(i for i, line in enumerate(lines) if line.startswith("times:"))
+    more = next(i for i, line in enumerate(lines) if line.startswith("more limits:"))
+    assert label < short < last < times < more
+    for phrase in (
+        "on any run",
+        "a shrinking list notifies again",
+        "brew update",
+        "a day late",
+        "does not prove delivery",
+        "resets silently",
+    ):
+        assert phrase in lines[more]
+
+
+async def test_the_linux_check_detail_names_the_notifier_and_the_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lines = (await row_details(tmp_path / "linux", monkeypatch))["check-updates"]
+    text = "\n".join(lines)
+    assert "update check is off — checks for new versions once a day" in text
+    assert "never changes a tool" in text
+    assert "notifies when the list of outdated tools changes" in text
+    assert "notify-send" in text and "Script Editor" not in text
+    assert_check_limits(lines)
+    assert lines[-1].startswith("runs: uv run --no-project --script ")
+    assert lines[-1].endswith(" check-updates")
+
+
+async def test_the_macos_check_detail_leads_with_the_one_time_permission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lines = (await row_details(tmp_path / "mac", monkeypatch, os_key="macos"))["check-updates"]
+    assert "Script Editor" in lines[0]
+    assert "System Settings > Notifications" in lines[0]
+    assert "allow them once" in lines[0]
+    assert "notify-send" not in "\n".join(lines)
+    assert "notifies: osascript" in lines
+    assert_check_limits(lines)
+
+
+@pytest.mark.parametrize(
+    ("os_key", "size", "status"),
+    [
+        ("macos", (80, 20), True),
+        ("macos", (80, 20), False),
+        ("fedora", (80, 20), True),
+        ("macos", (120, 40), False),
+    ],
+)
+async def test_the_permission_and_the_short_limits_are_visible_in_the_rendered_widget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    os_key: str,
+    size: tuple[int, int],
+    status: bool,
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key=os_key, present=EVERYTHING)
+    write_log(
+        env.ctx,
+        "2026-11-13T12:00:01 check-updates start",
+        "2026-11-13T12:00:04 check-updates ok: 12 updates available; 3 lookups failed: "
+        + "long result " * 17,
+    )
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=size) as pilot:
+        screen = await open_schedules(app, pilot)
+        if status:
+            screen.status.set("one\ntwo\nthree", "warn")
+        await settle(app, pilot)
+        await move_to(pilot, screen, "update-claude")
+        await move_to(pilot, screen, "check-updates")
+        await settle(app, pilot)
+        detail = screen.query_one("#schedule-detail", Static)
+        rendered = " ".join(
+            " ".join(detail.render_lines(Region(0, y, detail.outer_size.width, 1))[0].text.split())
+            for y in range(detail.size.height)
+        )
+        rendered = " ".join(rendered.split())
+        if os_key == "macos":
+            assert "Script Editor" in rendered
+            assert "System Settings > Notifications" in rendered
+        else:
+            assert "Script Editor" not in rendered
+        if not status or os_key == "fedora":
+            assert _SHORT_CHECK_LIMITS in rendered
+        if size == (120, 40):
+            assert rendered == " ".join(screen.detail_text.split())
+
+
+@pytest.mark.parametrize("os_key", ["fedora", "macos"])
+async def test_the_check_detail_names_no_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, os_key: str
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key=os_key, present=EVERYTHING)
+    result = (
+        "ok: 1 updates available; 1 lookups failed: "
+        "failed to resolve npm package @opencode/cli: rate limited"
+    )
+    write_log(
+        env.ctx,
+        "2026-11-13T12:00:01 check-updates start",
+        f"2026-11-13T12:00:04 check-updates {result}",
+    )
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(120, 40)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await move_to(pilot, screen, "check-updates")
+        lines = screen.detail_text.splitlines()
+        assert all(ord(ch) >= 32 and ord(ch) != 127 for line in lines for ch in line)
+        last = next(line for line in lines if line.startswith("last:"))
+        assert last.endswith(result)
+        for line in lines:
+            if line.startswith("last:"):
+                continue
+            assert not any(tool in line for tool in ("claude", "opencode", "copilot"))
+            if not line.startswith("times:"):
+                assert not any(ch.isdigit() for ch in line)
 
 
 async def test_the_check_row_shows_its_daily_cadence(

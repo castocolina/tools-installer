@@ -204,6 +204,22 @@ _CACHE_PRUNES = (
 
 _TMP_WHAT = "deletes orphaned Bun runtime files from the temp dir"
 _CACHE_WHAT = "runs each installed package manager's prune command"
+_CHECK_WHAT = (
+    "checks for new versions once a day, never changes a tool, and notifies when the list of "
+    "outdated tools changes"
+)
+_CHECK_PERMISSION = (
+    "Notifications come from Script Editor: allow them once in System Settings > Notifications."
+)
+_CHECK_NOTIFIER_LINUX = "notifies: notify-send, on your desktop session"
+_CHECK_NOTIFIER_MACOS = "notifies: osascript"
+_CHECK_LIMITS_SHORT = "limits: any run may notify; empty resets silently; ok is not delivery"
+_CHECK_LIMITS_MORE = (
+    "more limits: a changed non-empty list triggers a notification attempt on any run, manual or "
+    "catch-up, not once a day; an empty list resets silently; a shrinking list notifies again; "
+    "a successful command does not prove delivery; brew tools show only what brew already knows, "
+    "the check runs no brew update; a catch-up run at login can notify a day late"
+)
 
 
 _CURSOR_SCHEDULE_ID = "update-cursor-agent"
@@ -431,6 +447,8 @@ class SchedulesScreen(AppScreen):
             return schedule.target or ""
         if schedule.kind is schedules.JobKind.TMP_CLEANUP:
             return "$TMPDIR"
+        if schedule.kind is schedules.JobKind.CHECK_UPDATES:
+            return "installed"
         return " ".join(name for name, _command in self._managers()) or "none"
 
     def _managers(self) -> list[tuple[str, str]]:
@@ -461,6 +479,8 @@ class SchedulesScreen(AppScreen):
             what = f"runs {schedule.target}'s update the way the catalog's u does"
         elif schedule.kind is schedules.JobKind.TMP_CLEANUP:
             what = _TMP_WHAT
+        elif schedule.kind is schedules.JobKind.CHECK_UPDATES:
+            what = _CHECK_WHAT
         else:
             what = _CACHE_WHAT
         if row.word == "drift":
@@ -471,6 +491,10 @@ class SchedulesScreen(AppScreen):
             lines = [f"{schedule.label} — checking its state…"]
         else:
             lines = [f"{schedule.label} is {row.word} — {what}."]
+        if schedule.kind is schedules.JobKind.CHECK_UPDATES:
+            lines.append(_CHECK_LIMITS_SHORT)
+            if self._ctx is not None and self._ctx.platform_os == "macos":
+                lines.insert(0, _CHECK_PERMISSION)
         lines += [self._last_line(schedule.id), self._times_line(schedule)]
         lines += self._extra_lines(schedule)
         ctx = self._ctx
@@ -507,6 +531,9 @@ class SchedulesScreen(AppScreen):
 
     def _extra_lines(self, schedule: schedules.Schedule) -> list[str]:
         """The row-specific lines: what a cache prune runs, the cursor model, the tmp notes."""
+        if schedule.kind is schedules.JobKind.CHECK_UPDATES:
+            macos = self._ctx is not None and self._ctx.platform_os == "macos"
+            return [_CHECK_NOTIFIER_MACOS if macos else _CHECK_NOTIFIER_LINUX, _CHECK_LIMITS_MORE]
         if schedule.kind is schedules.JobKind.CACHE_CLEANUP:
             commands = [command for _name, command in self._managers()]
             if not commands:
