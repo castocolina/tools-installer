@@ -98,6 +98,28 @@ def holder(path: Path) -> Holder | None:
     return Holder(job, pid, since)
 
 
+def held_by(path: Path, job: str, pid: int | None) -> bool:
+    """Verify the named live holder and probe the kernel lock without writing."""
+    if pid is None:
+        return False
+    current = holder(path)
+    if current is None or current.job != job or current.pid != pid:
+        return False
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(descriptor)
+
+
 @contextmanager
 def hold(path: Path) -> Generator[None]:
     """Hold a blocking exclusive lock on `path` for a short critical section."""

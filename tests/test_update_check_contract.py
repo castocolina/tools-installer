@@ -48,7 +48,8 @@ def test_run_schedule_choices_are_the_update_and_check_rows() -> None:
     expected = tuple(
         s.id
         for s in schedules.SCHEDULES
-        if s.kind in (schedules.JobKind.UPDATE, schedules.JobKind.CHECK_UPDATES)
+        if s.kind
+        in (schedules.JobKind.UPDATE, schedules.JobKind.CHECK_UPDATES, schedules.JobKind.UPDATE_ALL)
     )
     assert set(schedules.RUN_SCHEDULE_IDS) == set(expected)
     assert tuple(sorted(schedules.RUN_SCHEDULE_IDS)) == tuple(sorted(expected))

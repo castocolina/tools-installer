@@ -118,7 +118,11 @@ def test_cli_run_schedule_accepts_the_update_check() -> None:
         with pytest.raises(SystemExit) as error:
             parse_args(["--run-schedule", bad])
         assert error.value.code == 2
-    assert (*schedules.UPDATE_SCHEDULE_IDS, "check-updates") == schedules.RUN_SCHEDULE_IDS
+    assert (
+        *schedules.UPDATE_SCHEDULE_IDS,
+        "check-updates",
+        "update-all",
+    ) == schedules.RUN_SCHEDULE_IDS
 
 
 def test_cli_run_schedule_flags() -> None:

@@ -11,7 +11,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from installer import cursor_shim, runlock, schedules, update_check
+from installer import cursor_shim, runlock, schedules, update_all, update_check
 from installer.model import Tool
 from installer.notify import Notifier, no_notifier
 from installer.ownership import ManagerOwnership
@@ -131,7 +131,15 @@ def _check(deps: RunDeps) -> tuple[str, int]:
     )
 
 
+def _update_all(deps: RunDeps) -> tuple[str, int]:
+    if deps.refresh is None or deps.context is None:
+        return "failed: update-all is not wired", 2
+    return update_all.summary_line(updated=0, skipped=0), 0
+
+
 def _run_unlocked(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, int]:
+    if schedule.kind is schedules.JobKind.UPDATE_ALL:
+        return _update_all(deps)
     if schedule.kind is schedules.JobKind.CHECK_UPDATES:
         return _check(deps)
     if schedule.target == "cursor-agent" and deps.context is not None:
@@ -139,18 +147,28 @@ def _run_unlocked(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, int
     return _update(schedule, deps)
 
 
-def run_schedule(schedule_id: str, deps: RunDeps, *, parent_holds_lock: bool) -> tuple[str, int]:
+def run_schedule(
+    schedule_id: str, deps: RunDeps, *, parent_holds_lock: bool, lock_holder_pid: int | None = None
+) -> tuple[str, int]:
     """Run one update or check schedule and return its result line and exit code.
 
     The schedule runner that spawned a timer's run already holds the run lock
     (`parent_holds_lock`); a manual run takes it itself and skips when it is held (D-12).
     """
     schedule = schedules.schedule_by_id(schedule_id)
-    if schedule.kind not in (schedules.JobKind.UPDATE, schedules.JobKind.CHECK_UPDATES):
+    if schedule.kind not in (
+        schedules.JobKind.UPDATE,
+        schedules.JobKind.CHECK_UPDATES,
+        schedules.JobKind.UPDATE_ALL,
+    ):
         return f"failed: {schedule_id} is not an update schedule", 2
-    if parent_holds_lock:
-        return _run_unlocked(schedule, deps)
     lock_path = deps.context.lock_path if deps.context is not None else runlock.run_lock_path()
+    if parent_holds_lock:
+        if schedule.kind is schedules.JobKind.UPDATE_ALL and not runlock.held_by(
+            lock_path, schedule_id, lock_holder_pid
+        ):
+            return "failed: update-all refuses an unverified parent run lock", 1
+        return _run_unlocked(schedule, deps)
     try:
         lock = runlock.try_acquire(lock_path, schedule_id)
     except OSError as error:

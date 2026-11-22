@@ -39,6 +39,7 @@ class JobKind(StrEnum):
     CACHE_CLEANUP = "cache-cleanup"
     UPDATE = "update"
     CHECK_UPDATES = "check-updates"
+    UPDATE_ALL = "update-all"
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class Schedule:
     default_interval: int
     default_start: str
     daily: bool = False  # Cadence belongs to the row, not its kind.
+    default_on: bool = True  # Rows seed on unless they say otherwise.
 
 
 _UNIT_MODE = 0o600  # unit files and plists carry proxy credentials from the installing shell
@@ -95,6 +97,17 @@ SCHEDULES: Final[tuple[Schedule, ...]] = (
     _update("copilot"),
     # 09:00 is off the update grid at 00:00, 06:00, 12:00 and 18:00.
     Schedule("check-updates", "update check", JobKind.CHECK_UPDATES, None, 24, "09:00", daily=True),
+    # Off the update grid and before the check, so the check sees the result.
+    Schedule(
+        "update-all",
+        "update all",
+        JobKind.UPDATE_ALL,
+        None,
+        24,
+        "03:00",
+        daily=True,
+        default_on=False,
+    ),
 )
 UPDATE_SCHEDULE_IDS: Final[tuple[str, ...]] = tuple(
     schedule.id for schedule in SCHEDULES if schedule.kind is JobKind.UPDATE
@@ -102,7 +115,11 @@ UPDATE_SCHEDULE_IDS: Final[tuple[str, ...]] = tuple(
 # IDs accepted by --run-schedule.
 RUN_SCHEDULE_IDS: Final[tuple[str, ...]] = (
     *UPDATE_SCHEDULE_IDS,
-    *(schedule.id for schedule in SCHEDULES if schedule.kind is JobKind.CHECK_UPDATES),
+    *(
+        schedule.id
+        for schedule in SCHEDULES
+        if schedule.kind in (JobKind.CHECK_UPDATES, JobKind.UPDATE_ALL)
+    ),
 )
 _BY_ID: Final[dict[str, Schedule]] = {schedule.id: schedule for schedule in SCHEDULES}
 
@@ -153,6 +170,8 @@ DEFAULT_CURSOR_MODEL: Final = "gpt-5.6-sol-xhigh"
 RUNNER_NAME: Final = "runner.py"
 LOG_CAP_BYTES: Final = daemon.DEFAULT_CAP_BYTES
 NOTIFIED_NAME: Final = "update-check.json"
+UPDATED_TODAY_NAME: Final = "updated-today.json"
+UPDATE_ALL_LOG_NAME: Final = "update-all.log"
 
 Slot = tuple[int, int]
 
@@ -872,6 +891,8 @@ def runner_argv(ctx: ScheduleContext, schedule: Schedule, uv: Path) -> list[str]
         job = ["cache-cleanup"]
     elif schedule.kind is JobKind.CHECK_UPDATES:
         job = ["check-updates", "--installer", str(ctx.checkout), "--uv", str(uv)]
+    elif schedule.kind is JobKind.UPDATE_ALL:
+        job = ["update-all", "--installer", str(ctx.checkout), "--uv", str(uv)]
     else:
         script = "prune-user-tmpdir.sh" if macos else "prune-tmp-linux.sh"
         job = ["tmp-cleanup", "--script", str(ctx.data_dir / script)]
@@ -1569,7 +1590,7 @@ def _row_action(
         on = bool(record.files) or _tmp_unit_present(ctx)
         return "refresh" if on and record.decided is not False else "none"
     if record.decided is None:
-        return "turn-on"
+        return "turn-on" if schedule.default_on else "none"
     if record.decided is False:
         return "none"
     return "refresh" if record.files else "turn-on"  # no files: a reinstall
@@ -1818,12 +1839,24 @@ def notified_path(ctx: ScheduleContext) -> Path:
     return ctx.state_path.with_name(NOTIFIED_NAME)
 
 
+def updated_today_path(ctx: ScheduleContext) -> Path:
+    """The once-a-day update record."""
+    return ctx.state_path.with_name(UPDATED_TODAY_NAME)
+
+
+def update_all_log_path(ctx: ScheduleContext) -> Path:
+    """The last update-all run's per-tool log."""
+    return ctx.log_path.with_name(UPDATE_ALL_LOG_NAME)
+
+
 def _state_artifacts(ctx: ScheduleContext) -> tuple[Path, ...]:
     # The lock files stay: deleting one another process holds would let a third lock a new inode.
     return (
         ctx.state_path,
         damaged_path(ctx.state_path),
         notified_path(ctx),
+        updated_today_path(ctx),
+        update_all_log_path(ctx),
         ctx.log_path,
         ctx.launchd_log_path,
         _legacy_log_path(ctx),

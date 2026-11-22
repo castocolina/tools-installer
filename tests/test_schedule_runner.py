@@ -1306,3 +1306,83 @@ def test_a_silently_failing_mac_notifier_reaches_the_log_with_a_fixed_reason(
     assert len(lines) == 2
     for forbidden in ("-e", "display notification", "alpha, beta"):
         assert forbidden not in "\n".join(lines)
+
+
+def test_update_all_child_is_read_only_bound_and_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _checkout(tmp_path)
+    bindir = tmp_path / "bin"
+    body = (
+        'echo "$@" > "{0}/argv"\npwd > "{0}/cwd"\n'
+        'echo "${{PYTHONDONTWRITEBYTECODE-unset}}" > "{0}/bytecode"\n'
+        'echo "ok: 0 updated"'
+    )
+    uv = _script(bindir, "uv", body.format(bindir))
+    calls: list[Any] = []
+
+    class Spy(subprocess.Popen[bytes]):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            calls.append(kwargs.get("stdin"))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(schedule_runner.subprocess, "Popen", Spy)
+    code, lines = _run(tmp_path, "update-all", "--installer", str(checkout), "--uv", str(uv))
+    assert code == 0 and _texts(lines, "update-all") == ["start", "ok: 0 updated"]
+    assert (bindir / "argv").read_text().split() == [
+        "run",
+        "--frozen",
+        "--isolated",
+        "--no-dev",
+        "setup.py",
+        "--run-schedule",
+        "update-all",
+        "--parent-holds-run-lock",
+        "--lock-holder-pid",
+        str(os.getpid()),
+    ]
+    assert Path((bindir / "cwd").read_text().strip()).resolve() == checkout.resolve()
+    assert (bindir / "bytecode").read_text().strip() == "1"
+    assert calls == [subprocess.DEVNULL]
+    real_child = vars(schedule_runner)["_run_child"]
+    timeouts: list[float] = []
+
+    def child(argv: list[str], *, timeout: float, **kwargs: Any) -> Any:
+        timeouts.append(timeout)
+        return real_child(argv, timeout=timeout, **kwargs)
+
+    monkeypatch.setitem(vars(schedule_runner), "_run_child", child)
+    assert _run(tmp_path, "update-all", "--installer", str(checkout), "--uv", str(uv))[0] == 0
+    assert timeouts == [10800] and timeouts[0] > vars(schedule_runner)["_UPDATE_TIMEOUT"]
+
+
+def test_update_all_timeout_and_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    checkout = _checkout(tmp_path)
+    pidfile = tmp_path / "uv.pid"
+    uv = _hanging_uv(tmp_path, f'echo $$ > "{pidfile}"\nsleep 60')
+    monkeypatch.setitem(vars(schedule_runner), "_UPDATE_ALL_TIMEOUT", 1)
+    code, lines = _run(tmp_path, "update-all", "--installer", str(checkout), "--uv", str(uv))
+    pid = int(pidfile.read_text())
+    try:
+        assert code == 1 and _texts(lines, "update-all") == [
+            "start",
+            "failed: the update-all timed out",
+        ]
+        assert _gone(pid)
+    finally:
+        _reap(pid)
+    _assert_lock_released(tmp_path)
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_BOUND", 0.3)
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_POLL", 0.05)
+    holder = _hold(tmp_path / "state" / "run.lock", "update-claude 1 2026-11-13T00:00:00+00:00\n")
+    try:
+        code, lines = _run(tmp_path, "update-all", "--installer", str(checkout), "--uv", str(uv))
+    finally:
+        os.close(holder)
+    assert code == 0 and _texts(lines, "update-all")[-1] == "skipped: busy"
+
+
+@pytest.mark.parametrize("args", [["--uv", "u"], ["--installer", "i"]])
+def test_update_all_missing_args(tmp_path: Path, args: list[str]) -> None:
+    code, lines = _run(tmp_path, "update-all", *args)
+    assert code == 2 and lines == []

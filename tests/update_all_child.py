@@ -1,0 +1,64 @@
+"""Offline child for the scheduled update-all tracer."""
+
+import json
+import os
+import traceback
+from datetime import UTC, datetime
+from pathlib import Path
+
+import setup
+from installer import schedules
+from installer.platform import Platform
+from tests.update_check_child import patch
+from tests.update_check_doubles import real_service
+
+
+def main(config_path: str, argv: list[str]) -> int:
+    config = json.loads(Path(config_path).read_text())
+    home = Path(config["home"])
+    runs: list[str] = []
+
+    class UpdateSpy:
+        def run(self, target: object) -> None:
+            runs.append(str(target))
+            raise AssertionError("unexpected update")
+
+    try:
+        patch(setup, "__file__", str(Path(config["checkout"]) / "setup.py"))
+        patch(
+            setup,
+            "detect",
+            lambda: Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        )
+
+        def load(_path: object) -> list[object]:
+            return []
+
+        patch(setup, "load_tools", load)
+        service = real_service(
+            home, resolve_tag=lambda _repo: "v1", now=lambda: datetime.now(UTC), installed="v1"
+        )
+
+        def services(*_args: object, **_kwargs: object) -> tuple[object, object, None, None]:
+            return service, UpdateSpy(), None, None
+
+        patch(setup, "_build_services", services)
+        code = setup.main(argv)
+        ctx = schedules.context_for(
+            "fedora", checkout=Path(config["checkout"]), read_models=lambda _a: None
+        )
+        Path(config["result"]).write_text(
+            json.dumps(
+                {
+                    "code": code,
+                    "runs": runs,
+                    "bytecode": os.environ.get("PYTHONDONTWRITEBYTECODE"),
+                    "no_sudo": os.environ.get("HOMEBREW_NO_SUDO"),
+                    "lock": str(ctx.lock_path),
+                }
+            )
+        )
+        return code
+    except BaseException:
+        Path(config["traceback"]).write_text(traceback.format_exc())
+        raise

@@ -561,6 +561,7 @@ def _run_schedule(options: Options) -> int:
         options.run_schedule or "",
         _schedule_run_deps(tools, platform),
         parent_holds_lock=options.parent_holds_run_lock,
+        lock_holder_pid=options.lock_holder_pid,
     )
     print(line)
     return code

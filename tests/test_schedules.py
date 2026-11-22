@@ -102,8 +102,8 @@ def test_default_schedule_round_trips(tmp_path: Path) -> None:
     assert record_for(saved, "update-copilot") == ScheduleRecord(None, 6, "00:00", ())
 
 
-def test_exactly_two_rows_are_daily() -> None:
-    assert {s.id for s in SCHEDULES if s.daily} == {"tmp-cleanup", "check-updates"}
+def test_exactly_three_rows_are_daily() -> None:
+    assert {s.id for s in SCHEDULES if s.daily} == {"tmp-cleanup", "check-updates", "update-all"}
 
 
 def test_the_check_row_fields() -> None:
@@ -145,6 +145,7 @@ def test_the_table_is_closed_and_ordered() -> None:
         "update-cursor-agent",
         "update-copilot",
         "check-updates",
+        "update-all",
     )
     assert tuple(s.label for s in SCHEDULES) == (
         "tmp cleanup",
@@ -155,6 +156,7 @@ def test_the_table_is_closed_and_ordered() -> None:
         "cursor-agent update",
         "copilot update",
         "update check",
+        "update all",
     )
     assert UPDATE_SCHEDULE_IDS == (
         "update-claude",
@@ -171,6 +173,7 @@ def test_the_table_is_closed_and_ordered() -> None:
         "pi",
         "cursor-agent",
         "copilot",
+        None,
         None,
     ]
     assert schedule_by_id("update-pi").target == "pi"

@@ -13,8 +13,8 @@
 Argv: `<job> [job args] --log PATH --lock PATH --cap-bytes N` with the jobs
 `tmp-cleanup --script PATH [-- <script args>]`, `cache-cleanup` and
 `update <tool> --installer CHECKOUT --uv UV`, and
-`check-updates --installer CHECKOUT --uv UV`. The log id is `tmp-cleanup`,
-`cache-cleanup`, `update-<tool>` or `check-updates`.
+`check-updates --installer CHECKOUT --uv UV` or `update-all --installer CHECKOUT --uv UV`.
+The log id is `tmp-cleanup`, `cache-cleanup`, `update-<tool>`, `check-updates` or `update-all`.
 
 Every run takes the cross-process run lock. A lock held by another scheduled run is waited
 for (polled, bounded, one `waited:` line); a lock held by the installer, or a wait that passes
@@ -50,6 +50,8 @@ from typing import NamedTuple
 _TMP_TIMEOUT = 600
 _MANAGER_TIMEOUT = 1200
 _UPDATE_TIMEOUT = 1800
+# Three hours for managers and dependents; the child bounds each command.
+_UPDATE_ALL_TIMEOUT = 10800
 _RESULT_PREFIXES = ("ok:", "skipped:", "failed:")
 # Source: installer/legacy_guard.py SHIM_SENTINEL, REDIRECT_SENTINEL and _SHIM_MAX_BYTES (this file
 # cannot import it; tests/test_schedule_runner.py pins the copy).
@@ -66,11 +68,8 @@ _MANAGERS = (
 # wait turns a busy cache into a skip instead of a 5-minute stall and a failure.
 _UV_LOCK_TIMEOUT = "5"
 _UV_LOCK_MARKER = b"when waiting for lock"
-# The six calendar schedules share one grid, so they fire together: a runner that finds the
-# lock held by another scheduled run waits for it. The bound is 2 h: a holder lives at most
-# _UPDATE_TIMEOUT plus the kill grace (about 30 min), so a queue of waiters drains well inside
-# it, and a waiter that then runs for up to 30 min still ends 2.5 h after its slot, before the
-# next 3 h slot (24.2 F1).
+# A holder may live for three hours plus kill grace and the child's stop allowance. A per-tool
+# row that gives up after two hours misses its execution: update-all does not cover every tool.
 _WAIT_BOUND = 7200
 _WAIT_POLL = 5
 _INSTALLER_JOB = "installer"  # source: installer/runlock.py INSTALLER_JOB
@@ -321,7 +320,14 @@ def _tmp_cleanup(script: str, forwarded: list[str]) -> str:
 
 
 def _update(
-    run_id: str, installer: str, uv: str, *, what: str = "update", readonly: bool = False
+    run_id: str,
+    installer: str,
+    uv: str,
+    *,
+    what: str = "update",
+    readonly: bool = False,
+    lock_holder: bool = False,
+    timeout: float | None = None,
 ) -> str:
     """Run the installer's own `--run-schedule`; its last result line is ours."""
     setup = Path(installer) / "setup.py"
@@ -340,8 +346,9 @@ def _update(
             "--run-schedule",
             run_id,
             "--parent-holds-run-lock",
+            *(["--lock-holder-pid", str(os.getpid())] if lock_holder else []),
         ],
-        timeout=_UPDATE_TIMEOUT,
+        timeout=_UPDATE_TIMEOUT if timeout is None else timeout,
         cwd=Path(installer),
         extra_env=(
             {
@@ -474,6 +481,7 @@ def _parse(argv: list[str]) -> tuple[str, str, dict[str, str], list[str]]:
         "cache-cleanup": (),
         "update": ("--installer", "--uv"),
         "check-updates": ("--installer", "--uv"),
+        "update-all": ("--installer", "--uv"),
     }.get(job)
     if required is None:
         raise _UsageError(f"unknown job {job!r}")
@@ -533,6 +541,15 @@ def _locked_run(
             "update": lambda: _update(run_id, options["--installer"], options["--uv"]),
             "check-updates": lambda: _update(
                 run_id, options["--installer"], options["--uv"], what="update check", readonly=True
+            ),
+            "update-all": lambda: _update(
+                run_id,
+                options["--installer"],
+                options["--uv"],
+                what="update-all",
+                readonly=True,
+                timeout=_UPDATE_ALL_TIMEOUT,
+                lock_holder=True,
             ),
         }
         try:

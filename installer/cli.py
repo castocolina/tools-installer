@@ -17,6 +17,7 @@ class Options:
     link_mode: str | None = None
     run_schedule: str | None = None
     parent_holds_run_lock: bool = False
+    lock_holder_pid: int | None = None
 
 
 def parse_args(argv: list[str]) -> Options:
@@ -59,8 +60,8 @@ def parse_args(argv: list[str]) -> Options:
         default=None,
         metavar="ID",
         help=(
-            "run one scheduled job (an update row or the update check) and print one result line "
-            "(used by the schedule timers)"
+            "run one scheduled job (an update row, the update check or update-all) "
+            "and print one result line (used by the schedule timers)"
         ),
     )
     parser.add_argument(
@@ -68,6 +69,7 @@ def parse_args(argv: list[str]) -> Options:
         action="store_true",
         help="internal: the schedule runner already holds the run lock",
     )
+    parser.add_argument("--lock-holder-pid", type=int, default=None, help=argparse.SUPPRESS)
     ns = parser.parse_args(argv)
 
     categories: list[str] = []
@@ -87,4 +89,5 @@ def parse_args(argv: list[str]) -> Options:
         link_mode=ns.link_mode,
         run_schedule=ns.run_schedule,
         parent_holds_run_lock=ns.parent_holds_run_lock,
+        lock_holder_pid=ns.lock_holder_pid,
     )
