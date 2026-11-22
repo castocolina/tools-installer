@@ -247,6 +247,7 @@ async def test_cells_from_state_and_log(tmp_path: Path, monkeypatch: pytest.Monk
             "! 12:00",
             "running",
             "never",
+            "never",
         ]
         assert cell(app, "update-claude", "every") == "6h 00:00"
         assert cell(app, "update-claude", "next") == "18:00"
@@ -676,9 +677,9 @@ async def test_encoding_and_width(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
         screen.status.set("one\ntwo\nthree", "warn")
         await pilot.pause()
-        assert table.region.height == 9
+        assert table.region.height == 10
         assert table.max_scroll_y == 0
-        assert detail.region.height == 3
+        assert detail.region.height == 2
 
 
 @pytest.mark.parametrize(
@@ -841,6 +842,71 @@ async def test_e_is_refused_before_the_modal_and_again_at_the_pick(
         assert (screen.status.text, screen.status.severity) == (_REMOVAL_REFUSAL, Severity.WARN)
         assert timer_of(env).read_bytes() == before
         app.end_mutation()
+
+
+async def test_the_update_all_row_cells(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        await open_schedules(app, pilot)
+        for column, expected in {
+            "target": "all tools",
+            "state": "○ [off]",
+            "every": "24h 03:00",
+            "next": "–",
+            "last": "never",
+            "script": "runner.py",
+        }.items():
+            assert cell(app, "update-all", column) == expected
+
+
+@pytest.mark.parametrize("on", [False, True])
+async def test_the_update_all_detail_leads_with_what_it_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, on: bool
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    if on:
+        schedules.turn_on(env.ctx, "update-all")
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await move_to(pilot, screen, "update-all")
+        lines = screen.detail_text.splitlines()
+        assert lines[0].startswith(
+            f"update all is {'on' if on else 'off'} — updates managers, then their tools"
+        )
+        assert "off by default" in lines[0]
+        assert "off until you turn it on" not in screen.detail_text
+        assert cell_len(lines[0]) <= 72
+        assert "times: daily at 03:00 (local)" in lines
+        assert lines[-1].startswith("runs: uv run --no-project --script ")
+        assert lines[-1].endswith(" update-all")
+        for line in lines:
+            if not line.startswith(("times:", "runs:")):
+                assert not any(ch.isdigit() for ch in line)
+                assert not any(tool in line for tool in ("claude", "opencode", "copilot"))
+
+
+async def test_the_update_all_row_time_editor_is_daily(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    schedules.turn_on(env.ctx, "update-all")
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await move_to(pilot, screen, "update-all")
+        await pilot.press("e")
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, ScheduleTimeScreen)
+        assert list(modal.query(Select[int])) == []
+        assert "Daily at (HH:MM, local time)" in [
+            str(label.content) for label in modal.query(Label)
+        ]
+        await type_and_submit(pilot, modal, "04:15")
+        await settle(app, pilot)
+        assert screen.status.text == "update all now runs daily at 04:15; next run at 04:15."
 
 
 _SHORT_CHECK_LIMITS = "limits: any run may notify; empty resets silently; ok is not delivery"

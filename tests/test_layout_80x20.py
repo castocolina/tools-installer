@@ -328,10 +328,10 @@ async def test_schedules_chrome_at_80x20(tmp_path: Path) -> None:
     async with app.run_test(size=(80, 20)) as pilot:
         screen = await _open(app, pilot, "schedules")
         _assert_chrome(screen)
-        # Note, the header row and eight schedule rows, then the detail panel down to the status.
+        # Note, the header row and nine schedule rows, then the detail panel down to the status.
         assert rows_of(screen, screen.query_one("#schedule-note")) == {3}
-        assert rows_of(screen, screen.query_one(DataTable[Any])) == set(range(4, 13))
-        assert rows_of(screen, screen.query_one("#schedule-detail")) == set(range(13, 18))
+        assert rows_of(screen, screen.query_one(DataTable[Any])) == set(range(4, 14))
+        assert rows_of(screen, screen.query_one("#schedule-detail")) == set(range(14, 18))
         assert rows_of(screen, app.view("schedules").status) == {18}
 
 

@@ -204,10 +204,9 @@ _CACHE_PRUNES = (
 
 _TMP_WHAT = "deletes orphaned Bun runtime files from the temp dir"
 _CACHE_WHAT = "runs each installed package manager's prune command"
-_CHECK_WHAT = (
-    "checks for new versions once a day, never changes a tool, and notifies when the list of "
-    "outdated tools changes"
-)
+_UPDATE_ALL_WHAT = "updates managers, then their tools; off by default"
+_CHECK_WHAT = "checks for new versions once a day"
+_CHECK_MORE_WHAT = "it never changes a tool, and notifies when the list of outdated tools changes"
 _CHECK_PERMISSION = (
     "Notifications come from Script Editor: allow them once in System Settings > Notifications."
 )
@@ -253,7 +252,8 @@ class SchedulesScreen(AppScreen):
     ]
     DEFAULT_CSS = """
     SchedulesScreen #schedule-note { height: 1; padding: 0 1; }
-    SchedulesScreen DataTable { height: auto; max-height: 9; }
+    /* Header plus nine schedule rows. */
+    SchedulesScreen DataTable { height: auto; max-height: 10; }
     SchedulesScreen #schedule-detail {
         height: 1fr; padding: 0 1; background: $surface; overflow-y: auto;
     }
@@ -449,6 +449,8 @@ class SchedulesScreen(AppScreen):
             return "$TMPDIR"
         if schedule.kind is schedules.JobKind.CHECK_UPDATES:
             return "installed"
+        if schedule.kind is schedules.JobKind.UPDATE_ALL:
+            return "all tools"
         return " ".join(name for name, _command in self._managers()) or "none"
 
     def _managers(self) -> list[tuple[str, str]]:
@@ -481,6 +483,8 @@ class SchedulesScreen(AppScreen):
             what = _TMP_WHAT
         elif schedule.kind is schedules.JobKind.CHECK_UPDATES:
             what = _CHECK_WHAT
+        elif schedule.kind is schedules.JobKind.UPDATE_ALL:
+            what = _UPDATE_ALL_WHAT
         else:
             what = _CACHE_WHAT
         if row.word == "drift":
@@ -533,7 +537,11 @@ class SchedulesScreen(AppScreen):
         """The row-specific lines: what a cache prune runs, the cursor model, the tmp notes."""
         if schedule.kind is schedules.JobKind.CHECK_UPDATES:
             macos = self._ctx is not None and self._ctx.platform_os == "macos"
-            return [_CHECK_NOTIFIER_MACOS if macos else _CHECK_NOTIFIER_LINUX, _CHECK_LIMITS_MORE]
+            return [
+                _CHECK_MORE_WHAT,
+                _CHECK_NOTIFIER_MACOS if macos else _CHECK_NOTIFIER_LINUX,
+                _CHECK_LIMITS_MORE,
+            ]
         if schedule.kind is schedules.JobKind.CACHE_CLEANUP:
             commands = [command for _name, command in self._managers()]
             if not commands:
