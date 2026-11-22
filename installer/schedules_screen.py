@@ -186,8 +186,6 @@ _CHECKING_NOTE = "Checking for a user timer manager…"
 
 _NO_MANAGER_NOTE = "unavailable: no user timer manager — nothing is scheduled on this machine."
 _LINUX_NOTE = "Timers run while you are logged in; a missed run catches up once at login."
-
-
 _MACOS_NOTE = "Missed during sleep: runs once at wake. Missed while shut down: skipped."
 _SCHEDULE_DRIFT = "Drift: its timer files are missing or changed. space writes them again."
 
@@ -205,6 +203,20 @@ _CACHE_PRUNES = (
 _TMP_WHAT = "deletes orphaned Bun runtime files from the temp dir"
 _CACHE_WHAT = "runs each installed package manager's prune command"
 _UPDATE_ALL_WHAT = "updates managers, then their tools; off by default"
+_UPDATE_ALL_PREVIEW = (
+    "preview: uv run --isolated --no-dev setup.py --run-schedule update-all --plan"
+)
+_UPDATE_ALL_LOG = (
+    "log: update-all.log beside the schedule log holds the last run, one line per tool; "
+    "--plan writes no installer state; one notification is attempted after a run that updated "
+    "or failed something"
+)
+_UPDATE_ALL_LIMITS = (
+    "limits: casks are left alone on macOS; a failed manager skips its dependents; "
+    "a tool with no update command is skipped; a tool update-all updated is skipped by its "
+    "own row that day while the daily record can be read and saved; vendor updaters may edit "
+    "shell files"
+)
 _CHECK_WHAT = "checks for new versions once a day"
 _CHECK_MORE_WHAT = "it never changes a tool, and notifies when the list of outdated tools changes"
 _CHECK_PERMISSION = (
@@ -495,6 +507,8 @@ class SchedulesScreen(AppScreen):
             lines = [f"{schedule.label} — checking its state…"]
         else:
             lines = [f"{schedule.label} is {row.word} — {what}."]
+        if schedule.kind is schedules.JobKind.UPDATE_ALL:
+            lines.insert(1, _UPDATE_ALL_PREVIEW)
         if schedule.kind is schedules.JobKind.CHECK_UPDATES:
             lines.append(_CHECK_LIMITS_SHORT)
             if self._ctx is not None and self._ctx.platform_os == "macos":
@@ -542,6 +556,8 @@ class SchedulesScreen(AppScreen):
                 _CHECK_NOTIFIER_MACOS if macos else _CHECK_NOTIFIER_LINUX,
                 _CHECK_LIMITS_MORE,
             ]
+        if schedule.kind is schedules.JobKind.UPDATE_ALL:
+            return [_UPDATE_ALL_LOG, _UPDATE_ALL_LIMITS]
         if schedule.kind is schedules.JobKind.CACHE_CLEANUP:
             commands = [command for _name, command in self._managers()]
             if not commands:

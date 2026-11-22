@@ -882,9 +882,129 @@ async def test_the_update_all_detail_leads_with_what_it_does(
         assert lines[-1].startswith("runs: uv run --no-project --script ")
         assert lines[-1].endswith(" update-all")
         for line in lines:
-            if not line.startswith(("times:", "runs:")):
+            if not line.startswith(("times:", "runs:", "preview:")):
                 assert not any(ch.isdigit() for ch in line)
                 assert not any(tool in line for tool in ("claude", "opencode", "copilot"))
+
+
+@pytest.mark.parametrize("os_key", ["fedora", "macos"])
+async def test_the_update_all_detail_names_the_preview_the_log_and_the_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, os_key: str
+) -> None:
+    lines = (await row_details(tmp_path, monkeypatch, os_key=os_key))["update-all"]
+    assert lines[:4] == [
+        "update all is off — updates managers, then their tools; off by default.",
+        "preview: uv run --isolated --no-dev setup.py --run-schedule update-all --plan",
+        "last: never",
+        "times: daily at 03:00 (local)",
+    ]
+    assert lines[4].startswith("log: update-all.log")
+    for phrase in (
+        "last run",
+        "one line per tool",
+        "--plan writes no installer state",
+        "one notification is attempted",
+        "updated or failed",
+    ):
+        assert phrase in lines[4]
+    assert lines[5].startswith("limits: casks")
+    for phrase in (
+        "macOS",
+        "a failed manager skips its dependents",
+        "no update command",
+        "skipped by its own row that day",
+        "record can be read and saved",
+        "vendor updaters may edit shell files",
+    ):
+        assert phrase in lines[5]
+    assert lines[6].startswith("runs: uv run --no-project --script ")
+    assert lines[6].endswith(" update-all")
+    assert "changes nothing" not in " ".join(lines)
+    assert all(ord(ch) >= 32 and ord(ch) != 127 for line in lines for ch in line)
+
+
+@pytest.mark.parametrize("os_key", ["fedora", "macos"])
+async def test_the_update_all_extra_lines_stay_out_of_the_other_rows_assertions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, os_key: str
+) -> None:
+    details = await row_details(tmp_path, monkeypatch, os_key=os_key)
+    assert not any(
+        word in line
+        for line in details["update-all"]
+        for word in ("temp-directory", "home filesystem", "usage", "free space")
+    )
+    for key, lines in details.items():
+        if key != "update-all":
+            assert not any(
+                line.startswith(("preview:", "log: update-all.log", "limits: casks"))
+                for line in lines
+            )
+
+
+def rendered_detail_rows(screen: SchedulesScreen) -> list[str]:
+    detail = screen.query_one("#schedule-detail", Static)
+    return [
+        detail.render_lines(Region(0, y, detail.outer_size.width, 1))[0].text.strip()
+        for y in range(detail.size.height)
+    ]
+
+
+@pytest.mark.parametrize("os_key", ["fedora", "macos"])
+@pytest.mark.parametrize("status", [False, True])
+async def test_the_preview_is_visible_in_the_rendered_widget_at_80x20(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, os_key: str, status: bool
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key=os_key, present=EVERYTHING)
+    app = make_app(env, monkeypatch)
+    command = "uv run --isolated --no-dev setup.py --run-schedule update-all --plan"
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        if status:
+            screen.status.set("one\ntwo\nthree", "warn")
+        await settle(app, pilot)
+        await move_to(pilot, screen, "update-all")
+        rows = rendered_detail_rows(screen)
+        assert len(rows) == (2 if status else 4)
+        assert rows[0].startswith("update all is off — updates managers")
+        assert command in rows[1]
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(100, 30)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await move_to(pilot, screen, "update-all")
+        rendered = " ".join(rendered_detail_rows(screen))
+        assert "log: update-all.log" in rendered
+        assert "limits: casks" in rendered
+
+
+async def test_the_preview_survives_unavailable_and_cleared_long_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING, systemctl=False)
+    app = make_app(env, monkeypatch)
+    command = "uv run --isolated --no-dev setup.py --run-schedule update-all --plan"
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await move_to(pilot, screen, "update-all")
+        rows = rendered_detail_rows(screen)
+        assert rows[0].startswith("unavailable:")
+        assert command in rows[1]
+        assert screen.detail_text.splitlines()[2].startswith("updates managers")
+
+    env = make_env(tmp_path / "available", monkeypatch, os_key="fedora", present=EVERYTHING)
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await move_to(pilot, screen, "update-all")
+        screen.status.set("one\ntwo\nthree\nfour", "warn")
+        await settle(app, pilot)
+        rows = rendered_detail_rows(screen)
+        assert len(rows) == 1
+        assert rows[0].startswith("update all is off")
+        assert command in screen.detail_text
+        screen.status.clear()
+        await settle(app, pilot)
+        await move_to(pilot, screen, "update-all")
+        assert command in rendered_detail_rows(screen)[1]
 
 
 async def test_the_update_all_row_time_editor_is_daily(
