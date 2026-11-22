@@ -323,28 +323,28 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 34-01-PLAN.md — The eighth Schedules row: `JobKind.CHECK_UPDATES`, the `Schedule.daily` flag replacing the seven hard-coded "tmp cleanup is daily" checks, the `check-updates` row (daily 09:00, on by default) with its runner argv, the notified-set path in the swept state artifacts, table `max-height: 9`, and every closed-table test the row forces (NOTIFY-01)
+- [ ] 34-01-PLAN.md — The eighth Schedules row: `JobKind.CHECK_UPDATES`, the `Schedule.daily` flag replacing the seven hard-coded "tmp cleanup is daily" checks, the `check-updates` row (daily 09:00, on by default) with its runner argv, the notified-set path in the swept state artifacts, table `max-height: 9`, and the 29 existing tests the row forces, each edited under a stated rule, none weakened (NOTIFY-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 34-02-PLAN.md — `installer/notify.py` (the `Notifier` seam, `notify-send` and `osascript` argv builders, the session-bus rule, one-line skip reasons), the runner passing `DBUS_SESSION_BUS_ADDRESS`, `RunDeps.notify` with a safe default and the `setup` wiring (NOTIFY-04, NOTIFY-05)
+- [ ] 34-02-PLAN.md — `installer/notify.py` (the `Notifier` seam, `notify-send` and `osascript` argv builders, the session-bus rule with its runtime-directory fallback, one-line skip reasons, the caller contract), the runner passing `DBUS_SESSION_BUS_ADDRESS`, `RunDeps.notify` with a safe default and the `setup` wiring (NOTIFY-04, NOTIFY-05)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 34-03-PLAN.md — The refresh path's per-call `stale_after` window and failure sink (no resolver wrapping, digests kept), `VersionRefreshService.cache_path` and the pure `outdated_ids(states)` phase 35 reuses (NOTIFY-02, NOTIFY-03)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 34-04-PLAN.md — `installer/update_check.py`: the installer self-check over an isolated read-only git (`run_git_isolated` keywords), the notified set `update-check.json` with the changed-set rule, oldest-checked-first order, the notification text and the one `ok: N updates available` result line with its `; ` clauses; the one plan that leaves the strict reachability guard red (NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-06)
+- [ ] 34-04-PLAN.md — `installer/update_check.py`: the installer self-check over an isolated read-only git (`run_git_isolated` keywords), fixed failure categories only, the notified set `update-check.json` written with a link-safe writer and the changed-set rule, last-attempt-first order, the notification text and the one `ok: N updates available` result line fitted to the runner's 300-character cap with its `; ` clauses including `installer behind origin/main`; the one plan that leaves the strict reachability guard red, for exactly `installer.update_check` (NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-06)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 34-05-PLAN.md — The runner's `check-updates` job and kind-aware timeout wording, the `--run-schedule` choice, `run_schedule` dispatch by kind through the shared lock branches, defaulted `RunDeps.refresh` and `RunDeps.git` and the `setup` wiring; clears the reachability guard (NOTIFY-01)
+- [ ] 34-05-PLAN.md — The runner's `check-updates` job and kind-aware timeout wording, the `--run-schedule` choice, `run_schedule` dispatch by kind through the shared lock branches, defaulted `RunDeps.refresh` and `RunDeps.git` and the `setup` wiring, closed stdin for every runner child, the real-runner-log composition test and the real-service allowed-writes test; clears the reachability guard (NOTIFY-01)
 
 **Wave 6** *(blocked on Wave 5 completion)*
-- [ ] 34-06-PLAN.md — The check row's target, what-text, notifier line, the one-time Script Editor permission and the limits line in the Schedules view, the Phase 34 subsection of `.claude/architecture.md` with its pinning test, and the dated amendment of success criterion 5 (NOTIFY-01, NOTIFY-03, NOTIFY-05)
+- [ ] 34-06-PLAN.md — The check row's target, what-text, notifier line, the one-time Script Editor permission as the first detail line (checked in the rendered 80x20 panel) and the limits line in the Schedules view, the Phase 34 subsection of `.claude/architecture.md` with its pinning test, and the dated amendment of success criterion 5 (NOTIFY-01, NOTIFY-03, NOTIFY-05)
 
 **Wave 7** *(blocked on Wave 6 completion)*
-- [ ] 34-07-PLAN.md — The `check-updates` pair in the `schedules` container target (orchestrator-run only) and its host tests (NOTIFY-01)
+- [ ] 34-07-PLAN.md — The `check-updates` pair in the `schedules` container target with a strict `ok: N updates available` verdict on both routes (orchestrator-run only) and its host tests (NOTIFY-01)
 
 **Wave 8** *(blocked on Wave 7 completion)*
-- [ ] 34-08-PLAN.md — Cross-file consistency tests (every row's runner argv parses, the phase 35 contract, the closed runner environment, the new modules' hard rules) and the phase-final `make validate` and `make test` (NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-04, NOTIFY-05, NOTIFY-06)
+- [ ] 34-08-PLAN.md — Cross-file consistency tests (every row's runner argv parses, the phase 35 contract including the `Notifier` seam, the runner environment pinned by equality, the new modules' hard rules) and the phase-final `make validate` and `make test` (NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-04, NOTIFY-05, NOTIFY-06)
 
 ### Phase 35: Opt-in auto-update, package managers first
 
