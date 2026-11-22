@@ -328,10 +328,10 @@ async def test_schedules_chrome_at_80x20(tmp_path: Path) -> None:
     async with app.run_test(size=(80, 20)) as pilot:
         screen = await _open(app, pilot, "schedules")
         _assert_chrome(screen)
-        # Note, the header row and seven schedule rows, then the detail panel down to the status.
+        # Note, the header row and eight schedule rows, then the detail panel down to the status.
         assert rows_of(screen, screen.query_one("#schedule-note")) == {3}
-        assert rows_of(screen, screen.query_one(DataTable[Any])) == set(range(4, 12))
-        assert rows_of(screen, screen.query_one("#schedule-detail")) == set(range(12, 18))
+        assert rows_of(screen, screen.query_one(DataTable[Any])) == set(range(4, 13))
+        assert rows_of(screen, screen.query_one("#schedule-detail")) == set(range(13, 18))
         assert rows_of(screen, app.view("schedules").status) == {18}
 
 
@@ -867,5 +867,5 @@ async def test_the_schedules_detail_ends_in_an_ellipsis_when_it_is_cut_at_80x20(
         detail = screen.query_one("#schedule-detail", Static)
         rows = detail.size.height
         assert len(list(Text(screen.detail_text).wrap(Console(width=78), 78))) > rows
-        last = detail.render_lines(Region(0, rows - 1, detail.size.width, 1))[0].text
+        last = detail.render_lines(Region(0, rows - 1, detail.outer_size.width, 1))[0].text
         assert last.rstrip().endswith("…"), last

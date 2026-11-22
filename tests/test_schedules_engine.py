@@ -282,6 +282,102 @@ def test_turn_on_then_off_leaves_nothing_behind(env: Env) -> None:
     assert files_left(env.home) == []
 
 
+def test_check_updates_writes_a_daily_linux_unit(env: Env) -> None:
+    ctx = env.ctx
+    turn_on(ctx, "check-updates")
+    base = "tools-installer-schedule-check-updates"
+    argv = runner_argv(ctx, schedule_by_id("check-updates"), env.uv)
+    assert argv[6:] == [
+        "check-updates",
+        "--installer",
+        str(ctx.checkout),
+        "--uv",
+        str(env.uv),
+        "--log",
+        str(ctx.log_path),
+        "--lock",
+        str(ctx.lock_path),
+        "--cap-bytes",
+        "262144",
+    ]
+    assert (
+        "ExecStart=" + " ".join(f'"{token}"' for token in argv)
+        in (ctx.unit_dir / f"{base}.service").read_text().splitlines()
+    )
+    lines = (ctx.unit_dir / f"{base}.timer").read_text().splitlines()
+    assert "OnCalendar=*-*-* 09:00:00" in lines
+    assert "Persistent=true" in lines
+    assert env.run.text() == ["daemon-reload", f"enable {base}.timer", f"restart {base}.timer"]
+    turn_off(ctx, "check-updates")
+    assert files_left(env.home) == []
+
+
+def test_check_updates_writes_a_daily_macos_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = macos_env(tmp_path, monkeypatch)
+    turn_on(env.ctx, "check-updates")
+    path = env.ctx.launch_agents_dir / "com.tools-installer.schedule.check-updates.plist"
+    data = plistlib.loads(path.read_bytes())
+    assert data["ProgramArguments"] == runner_argv(env.ctx, schedule_by_id("check-updates"), env.uv)
+    assert data["StartCalendarInterval"] == [{"Hour": 9, "Minute": 0}]
+
+
+def test_check_updates_retime_is_daily_whatever_the_interval(env: Env) -> None:
+    turn_on(env.ctx, "check-updates")
+    retime(env.ctx, "check-updates", 6, "10:30")
+    record = load_state(env.ctx.state_path).state.records["check-updates"]
+    assert (record.interval, record.start) == (24, "10:30")
+    timer = env.ctx.unit_dir / "tools-installer-schedule-check-updates.timer"
+    assert "OnCalendar=*-*-* 10:30:00" in timer.read_text().splitlines()
+
+
+@pytest.mark.parametrize("os_key", ["fedora", "macos"])
+def test_check_updates_units_carry_no_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, os_key: str
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key=os_key)
+    ctx = replace(
+        env.ctx,
+        environ={
+            **env.ctx.environ,
+            "GITHUB_TOKEN": "ghp_planted_value",
+            "GH_TOKEN": "gho_planted_value",
+            "HTTPS_PROXY": "http://u:p@proxy.invalid",
+        },
+    )
+    turn_on(ctx, "check-updates")
+    turn_on(ctx, "tmp-cleanup")
+    if os_key == "macos":
+        check = (
+            ctx.launch_agents_dir / "com.tools-installer.schedule.check-updates.plist"
+        ).read_bytes()
+        tmp = (ctx.launch_agents_dir / "com.tools-installer.prune-tmpdir.plist").read_bytes()
+        for data in (plistlib.loads(check), plistlib.loads(tmp)):
+            assert data["EnvironmentVariables"]["HTTPS_PROXY"] == "http://u:p@proxy.invalid"
+        texts = [check]
+    else:
+        check = (ctx.unit_dir / "tools-installer-schedule-check-updates.service").read_bytes()
+        tmp = (ctx.unit_dir / "tools-installer-prune-tmp.service").read_bytes()
+        assert b"HTTPS_PROXY=http://u:p@proxy.invalid" in check
+        assert b"HTTPS_PROXY=http://u:p@proxy.invalid" in tmp
+        texts = [
+            check,
+            (ctx.unit_dir / "tools-installer-schedule-check-updates.timer").read_bytes(),
+        ]
+    for text in texts:
+        for secret in (b"GITHUB_TOKEN", b"GH_TOKEN", b"ghp_planted_value", b"gho_planted_value"):
+            assert secret not in text
+
+
+def test_check_updates_turn_off_keeps_notified_set(env: Env) -> None:
+    turn_on(env.ctx, "check-updates")
+    path = schedules.notified_path(env.ctx)
+    path.write_text("[]")
+    turn_off(env.ctx, "check-updates")
+    assert path.read_text() == "[]"
+
+
 def test_paths_and_names() -> None:
     assert basename_for("update-claude") == "tools-installer-schedule-update-claude"
     assert basename_for("tmp-cleanup") == "tools-installer-prune-tmp"

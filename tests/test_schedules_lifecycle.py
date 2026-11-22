@@ -87,6 +87,7 @@ def unit_files(ctx: ScheduleContext, basename: str) -> list[Path]:
 
 
 CACHE_BASENAME = "tools-installer-schedule-cache-cleanup"
+CHECK_BASENAME = "tools-installer-schedule-check-updates"
 
 
 def test_first_run_turns_on_and_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,14 +101,14 @@ def test_first_run_turns_on_and_records(tmp_path: Path, monkeypatch: pytest.Monk
     assert len(unit_files(ctx, CACHE_BASENAME)) == 3
     assert len(unit_files(ctx, TMP_BASENAME)) == 3
     records = load_state(ctx.state_path).state.records
-    assert sorted(records) == ["cache-cleanup", "tmp-cleanup", "update-claude"]
+    assert sorted(records) == ["cache-cleanup", "check-updates", "tmp-cleanup", "update-claude"]
     assert records["update-claude"].decided is True
     assert records["cache-cleanup"].decided is True
     assert systemd_daemon.decided(ctx.myshellrc_path)
-    assert report.turned_on == ("tmp-cleanup", "cache-cleanup", "update-claude")
+    assert report.turned_on == ("tmp-cleanup", "cache-cleanup", "update-claude", "check-updates")
     assert reconcile_lines(report) == (
         (
-            "Turned on schedules: tmp cleanup, cache cleanup, claude update. "
+            "Turned on schedules: tmp cleanup, cache cleanup, claude update, update check. "
             "Change them in Schedules.",
             "ok",
         ),
@@ -130,6 +131,7 @@ def test_mid_pass_decision_is_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     lab = make_lab(tmp_path, monkeypatch)
     ctx = lab.ctx
     systemd_daemon.record_decided(ctx.myshellrc_path)  # tmp cleanup is decided: cache is first
+    decide_off(ctx, "check-updates")
     fired: list[bool] = []
 
     def other_process_turns_claude_off(_cmd: list[str]) -> None:
@@ -285,6 +287,7 @@ def test_moved_checkout_refreshes_units_in_place(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     lab = make_lab(tmp_path, monkeypatch)
+    decide_off(lab.ctx, "check-updates")
     ensure_schedule_defaults(lab.ctx)
     moved = tmp_path / "moved-checkout"
     shutil.copytree(CHECKOUT / "scripts", moved / "scripts")
@@ -333,6 +336,7 @@ def test_old_tmp_units_are_adopted_on_reconcile(
     ctx = lab.ctx
     old = seed_legacy_tmp(lab.env)
     decide_off(ctx, "cache-cleanup")
+    decide_off(ctx, "check-updates")
 
     report = ensure_schedule_defaults(ctx)
 
@@ -399,6 +403,7 @@ def test_macos_adoption_keeps_the_daily_time(
     )
     daemon.record_decided(ctx.myshellrc_path)
     decide_off(ctx, "cache-cleanup")
+    decide_off(ctx, "check-updates")
 
     report = ensure_schedule_defaults(ctx)
 
@@ -416,6 +421,7 @@ def test_failed_default_records_nothing(tmp_path: Path, monkeypatch: pytest.Monk
     ctx = lab.ctx
     systemd_daemon.record_decided(ctx.myshellrc_path)
     decide_off(ctx, "cache-cleanup")
+    decide_off(ctx, "check-updates")
 
     report = ensure_schedule_defaults(ctx)
 
@@ -476,8 +482,8 @@ def test_concurrent_reconciles_write_one_unit_set(
     assert errors == []
 
     turned = sorted(schedule_id for report in reports for schedule_id in report.turned_on)
-    assert turned == ["cache-cleanup", "tmp-cleanup", "update-claude"]
-    bases = (CLAUDE_BASENAME, CACHE_BASENAME, TMP_BASENAME)
+    assert turned == ["cache-cleanup", "check-updates", "tmp-cleanup", "update-claude"]
+    bases = (CLAUDE_BASENAME, CACHE_BASENAME, TMP_BASENAME, CHECK_BASENAME)
     names = sorted(path.name for path in ctx.unit_dir.iterdir())
     wanted = [f"{base}.{kind}" for base in bases for kind in ("service", "timer")]
     assert names == sorted(["timers.target.wants", *wanted])
@@ -489,6 +495,7 @@ def test_concurrent_reconciles_write_one_unit_set(
         "tmp-cleanup": True,
         "cache-cleanup": True,
         "update-claude": True,
+        "check-updates": True,
     }
 
 
@@ -545,7 +552,12 @@ def test_no_manager_reconcile_writes_nothing(
 LOCK_NAMES = frozenset(
     {"schedules.json.lock", "schedules.log.lock", "schedules.reconcile.lock", "run.lock"}
 )
-ALL_IDS = ("schedule:tmp-cleanup", "schedule:cache-cleanup", "schedule:update-claude")
+ALL_IDS = (
+    "schedule:tmp-cleanup",
+    "schedule:cache-cleanup",
+    "schedule:update-claude",
+    "schedule:check-updates",
+)
 
 
 def sweep(lab: Lab) -> SweepResult:
@@ -561,7 +573,12 @@ def sweep(lab: Lab) -> SweepResult:
 
 def plant_logs(ctx: ScheduleContext) -> list[Path]:
     """The logs a host holds after some runs: the schedule log, launchd's, and the old tmp one."""
-    paths = [ctx.log_path, ctx.launchd_log_path, ctx.log_path.with_name("prune-daemon.log")]
+    paths = [
+        ctx.log_path,
+        ctx.launchd_log_path,
+        ctx.log_path.with_name("prune-daemon.log"),
+        schedules.notified_path(ctx),
+    ]
     for path in paths:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("an old line\n")
@@ -597,7 +614,7 @@ def test_sweep_adapters_with_every_schedule_off_give_the_state_adapter(
     lab = make_lab(tmp_path, monkeypatch)
     ctx = lab.ctx
     ensure_schedule_defaults(ctx)
-    for schedule_id in ("tmp-cleanup", "cache-cleanup", "update-claude"):
+    for schedule_id in ("tmp-cleanup", "cache-cleanup", "update-claude", "check-updates"):
         turn_off(ctx, schedule_id)
     assert ctx.state_path.exists()
 
@@ -645,13 +662,37 @@ def test_full_uninstall_leaves_nothing(
     assert not marker_present
 
 
+def test_uninstall_keeps_a_directory_at_the_notified_path_and_cleans_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = make_lab(tmp_path, monkeypatch)
+    ctx = lab.ctx
+    ensure_schedule_defaults(ctx)
+    plant_logs(ctx)
+    directory = schedules.notified_path(ctx)
+    directory.unlink()
+    directory.mkdir(parents=True)
+    keep = directory / "keep.txt"
+    keep.write_text("mine")
+    result = sweep(lab)
+    assert len(result.failed) == 1
+    assert set(result.swept) | set(result.failed) == set(ALL_IDS)
+    assert keep.read_text() == "mine"
+    assert not ctx.state_path.exists()
+    assert not ctx.log_path.exists()
+    assert not ctx.launchd_log_path.exists()
+    assert not ctx.log_path.with_name("prune-daemon.log").exists()
+    assert leftovers(lab.env.home) == [str(keep.relative_to(lab.env.home))]
+    assert sweep(lab).failed == ("schedule:state",)
+
+
 def test_full_uninstall_with_every_schedule_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     lab = make_lab(tmp_path, monkeypatch)
     ctx = lab.ctx
     ensure_schedule_defaults(ctx)
-    for schedule_id in ("tmp-cleanup", "cache-cleanup", "update-claude"):
+    for schedule_id in ("tmp-cleanup", "cache-cleanup", "update-claude", "check-updates"):
         turn_off(ctx, schedule_id)
     plant_logs(ctx)
     policies = active_policies(
@@ -703,7 +744,11 @@ def test_sweep_refuses_a_changed_file(tmp_path: Path, monkeypatch: pytest.Monkey
     result = sweep(lab)
 
     assert result.failed == ("schedule:update-claude",)
-    assert result.swept == ("schedule:tmp-cleanup", "schedule:cache-cleanup")
+    assert result.swept == (
+        "schedule:tmp-cleanup",
+        "schedule:cache-cleanup",
+        "schedule:check-updates",
+    )
     assert timer.read_bytes() == edited
     assert unit_files(ctx, CACHE_BASENAME) == []
     assert ctx.state_path.exists()  # the changed file is still recorded
@@ -722,7 +767,11 @@ def test_sweep_refuses_a_changed_tmp_unit_and_keeps_the_marker(
     result = sweep(lab)
 
     assert result.failed == ("schedule:tmp-cleanup",)
-    assert result.swept == ("schedule:cache-cleanup", "schedule:update-claude")
+    assert result.swept == (
+        "schedule:cache-cleanup",
+        "schedule:update-claude",
+        "schedule:check-updates",
+    )
     assert service.read_bytes() == edited
     assert systemd_daemon.decided(ctx.myshellrc_path)  # a unit of it remains: the decision stays
 
@@ -920,7 +969,7 @@ def test_the_sweep_under_a_damaged_state_removes_every_timer_before_the_damaged_
 
     sweep_policies(list(sweep_adapters(lab.ctx)))
 
-    for basename in (CLAUDE_BASENAME, CACHE_BASENAME, TMP_BASENAME):
+    for basename in (CLAUDE_BASENAME, CACHE_BASENAME, TMP_BASENAME, CHECK_BASENAME):
         assert unit_files(lab.ctx, basename) == []
     assert seen
     assert all(seen)  # the copy outlived every unit removal

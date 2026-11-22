@@ -59,7 +59,8 @@ from tests.test_schedules_lifecycle import unit_files
 from tests.test_uninstall import plant_raw_yq, write_receipt
 
 TURNED_ON = (
-    "Turned on schedules: tmp cleanup, cache cleanup, claude update. Change them in Schedules."
+    "Turned on schedules: tmp cleanup, cache cleanup, claude update, update check. "
+    "Change them in Schedules."
 )
 REFUSAL = "A scheduled run is running; try again when it finishes."
 FEDORA = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
@@ -315,7 +316,9 @@ async def test_an_on_daemon_stays_on_across_the_upgrade(
     off = ScheduleRecord(False, 6, "00:00", ())
     update_state(
         env.ctx.state_path,
-        lambda state: replace(state, records={**state.records, "cache-cleanup": off}),
+        lambda state: replace(
+            state, records={**state.records, "cache-cleanup": off, "check-updates": off}
+        ),
     )
     app = _tui_app(monkeypatch, tmp_path, env, set(), initial_view="schedules")
     async with app.run_test(size=(100, 30)) as pilot:
@@ -490,8 +493,13 @@ def test_cursor_removal_removes_the_shim(
 def _on_lab(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, os_key: str) -> tuple[Env, list[str]]:
     env = make_env(tmp_path, monkeypatch, os_key=os_key, present=frozenset({"claude"}))
     ensure = schedules.ensure_schedule_defaults(env.ctx)
-    assert ensure.turned_on == ("tmp-cleanup", "cache-cleanup", "update-claude")
-    return env, ["schedule:tmp-cleanup", "schedule:cache-cleanup", "schedule:update-claude"]
+    assert ensure.turned_on == ("tmp-cleanup", "cache-cleanup", "update-claude", "check-updates")
+    return env, [
+        "schedule:tmp-cleanup",
+        "schedule:cache-cleanup",
+        "schedule:update-claude",
+        "schedule:check-updates",
+    ]
 
 
 def _schedule_leftovers(ctx: ScheduleContext) -> list[str]:

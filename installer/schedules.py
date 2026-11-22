@@ -38,6 +38,7 @@ class JobKind(StrEnum):
     TMP_CLEANUP = "tmp-cleanup"
     CACHE_CLEANUP = "cache-cleanup"
     UPDATE = "update"
+    CHECK_UPDATES = "check-updates"
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class Schedule:
     target: str | None
     default_interval: int
     default_start: str
+    daily: bool = False  # Cadence belongs to the row, not its kind.
 
 
 _UNIT_MODE = 0o600  # unit files and plists carry proxy credentials from the installing shell
@@ -76,6 +78,7 @@ SCHEDULES: Final[tuple[Schedule, ...]] = (
         None,
         24,
         f"{daemon.DEFAULT_HOUR:02d}:{daemon.DEFAULT_MINUTE:02d}",
+        daily=True,
     ),
     Schedule(
         "cache-cleanup",
@@ -90,6 +93,8 @@ SCHEDULES: Final[tuple[Schedule, ...]] = (
     _update("pi"),
     _update("cursor-agent"),
     _update("copilot"),
+    # 09:00 is off the update grid at 00:00, 06:00, 12:00 and 18:00.
+    Schedule("check-updates", "update check", JobKind.CHECK_UPDATES, None, 24, "09:00", daily=True),
 )
 UPDATE_SCHEDULE_IDS: Final[tuple[str, ...]] = tuple(
     schedule.id for schedule in SCHEDULES if schedule.kind is JobKind.UPDATE
@@ -142,6 +147,7 @@ def validate_model_id(value: str) -> str:
 DEFAULT_CURSOR_MODEL: Final = "gpt-5.6-sol-xhigh"
 RUNNER_NAME: Final = "runner.py"
 LOG_CAP_BYTES: Final = daemon.DEFAULT_CAP_BYTES
+NOTIFIED_NAME: Final = "update-check.json"
 
 Slot = tuple[int, int]
 
@@ -845,8 +851,8 @@ def _grid(
 
 
 def _calendar_grid(schedule: Schedule, record: ScheduleRecord) -> tuple[Slot, ...]:
-    """tmp cleanup is a daily time on macOS; every other schedule runs on its own interval."""
-    interval = 24 if schedule.kind is JobKind.TMP_CLEANUP else record.interval
+    """Daily rows run once a day; other schedules run on their own interval."""
+    interval = 24 if schedule.daily else record.interval
     return slots(interval, record.start)
 
 
@@ -859,6 +865,8 @@ def runner_argv(ctx: ScheduleContext, schedule: Schedule, uv: Path) -> list[str]
         job = ["update", schedule.target or "", "--installer", str(ctx.checkout), "--uv", str(uv)]
     elif schedule.kind is JobKind.CACHE_CLEANUP:
         job = ["cache-cleanup"]
+    elif schedule.kind is JobKind.CHECK_UPDATES:
+        job = ["check-updates", "--installer", str(ctx.checkout), "--uv", str(uv)]
     else:
         script = "prune-user-tmpdir.sh" if macos else "prune-tmp-linux.sh"
         job = ["tmp-cleanup", "--script", str(ctx.data_dir / script)]
@@ -1409,9 +1417,9 @@ def retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) ->
 def _retime(ctx: ScheduleContext, schedule_id: str, interval: int, start: str) -> ApplyReport:
     schedule = schedule_by_id(schedule_id)
     macos = ctx.platform_os == "macos"
-    if schedule.kind is JobKind.TMP_CLEANUP:
-        if not macos:
-            raise daemon.DaemonScheduleError(TMP_FIXED_CADENCE_MESSAGE)
+    if schedule.kind is JobKind.TMP_CLEANUP and not macos:
+        raise daemon.DaemonScheduleError(TMP_FIXED_CADENCE_MESSAGE)
+    if schedule.daily:
         interval = 24
     interval = validate_interval(interval)
     validate_start(start)
@@ -1800,11 +1808,17 @@ def _legacy_log_path(ctx: ScheduleContext) -> Path:
     return ctx.log_path.with_name("prune-daemon.log")
 
 
+def notified_path(ctx: ScheduleContext) -> Path:
+    """The update check's notified set, separate from the closed schedules.json schema."""
+    return ctx.state_path.with_name(NOTIFIED_NAME)
+
+
 def _state_artifacts(ctx: ScheduleContext) -> tuple[Path, ...]:
     # The lock files stay: deleting one another process holds would let a third lock a new inode.
     return (
         ctx.state_path,
         damaged_path(ctx.state_path),
+        notified_path(ctx),
         ctx.log_path,
         ctx.launchd_log_path,
         _legacy_log_path(ctx),
@@ -1849,8 +1863,14 @@ def _cleanup_if_last(ctx: ScheduleContext) -> None:
             )
         _prune_data_dirs(ctx)
         _clear_tmp_decided(ctx)
+        kept_paths: list[Path] = []
         for path in _state_artifacts(ctx):
-            path.unlink(missing_ok=True)
+            if path.is_dir() and not path.is_symlink():
+                kept_paths.append(path)  # A directory is never ours to delete.
+            else:
+                path.unlink(missing_ok=True)
+        if kept_paths:
+            raise OSError(f"kept, not a file: {', '.join(str(path) for path in kept_paths)}")
 
 
 def _clear_tmp_decided(ctx: ScheduleContext) -> None:

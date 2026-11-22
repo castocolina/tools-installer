@@ -237,7 +237,7 @@ class SchedulesScreen(AppScreen):
     ]
     DEFAULT_CSS = """
     SchedulesScreen #schedule-note { height: 1; padding: 0 1; }
-    SchedulesScreen DataTable { height: auto; max-height: 8; }
+    SchedulesScreen DataTable { height: auto; max-height: 9; }
     SchedulesScreen #schedule-detail {
         height: 1fr; padding: 0 1; background: $surface; overflow-y: auto;
     }
@@ -381,7 +381,7 @@ class SchedulesScreen(AppScreen):
         if self._is_linux_tmp(schedule):
             return None
         record = schedules.record_for(self._state, schedule.id)
-        interval = 24 if schedule.kind is schedules.JobKind.TMP_CLEANUP else record.interval
+        interval = 24 if schedule.daily else record.interval
         return schedules.slots(interval, record.start)
 
     def _cells(self, schedule: schedules.Schedule) -> list[Text]:
@@ -392,8 +392,7 @@ class SchedulesScreen(AppScreen):
         if self._is_linux_tmp(schedule):
             every = "10 min"
         else:
-            tmp = schedule.kind is schedules.JobKind.TMP_CLEANUP
-            every = f"{24 if tmp else record.interval}h {record.start}"
+            every = f"{24 if schedule.daily else record.interval}h {record.start}"
         job = "update" if schedule.kind is schedules.JobKind.UPDATE else schedule.label
         upcoming = self._next_text(schedule, row)
         return [
@@ -498,7 +497,7 @@ class SchedulesScreen(AppScreen):
         if grid is None:
             return "times: every 10 min, first run 2 min after login"
         names = [f"{hour:02d}:{minute:02d}" for hour, minute in grid]
-        if schedule.kind is schedules.JobKind.TMP_CLEANUP:
+        if schedule.daily:
             return f"times: daily at {names[0]} (local)"
         if len(names) <= TIMES_LISTED:
             return f"times: {', '.join(names)} (local)"
@@ -574,7 +573,7 @@ class SchedulesScreen(AppScreen):
             self.status.set(schedules.TMP_FIXED_CADENCE_MESSAGE, "warn")
             return
         record = schedules.record_for(self._state, schedule.id)
-        daily = schedule.kind is schedules.JobKind.TMP_CLEANUP
+        daily = schedule.daily
         modal = ScheduleTimeScreen(
             f"When {schedule.label} runs", None if daily else record.interval, record.start
         )
@@ -714,7 +713,7 @@ class SchedulesScreen(AppScreen):
         self, change: ScheduleChange, schedule: schedules.Schedule, report: schedules.ApplyReport
     ) -> tuple[str, str]:
         label = schedule.label
-        daily = schedule.kind is schedules.JobKind.TMP_CLEANUP
+        daily = schedule.daily
         phrase = (
             f"daily at {change.start}"
             if daily

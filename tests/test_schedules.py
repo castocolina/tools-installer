@@ -102,6 +102,39 @@ def test_default_schedule_round_trips(tmp_path: Path) -> None:
     assert record_for(saved, "update-copilot") == ScheduleRecord(None, 6, "00:00", ())
 
 
+def test_exactly_two_rows_are_daily() -> None:
+    assert {s.id for s in SCHEDULES if s.daily} == {"tmp-cleanup", "check-updates"}
+
+
+def test_the_check_row_fields() -> None:
+    from installer import schedules
+
+    row = schedule_by_id("check-updates")
+    assert (row.kind, row.target, row.default_interval, row.default_start, row.daily) == (
+        schedules.JobKind.CHECK_UPDATES,
+        None,
+        24,
+        "09:00",
+        True,
+    )
+
+
+def test_rows_are_found_by_id_whatever_their_position() -> None:
+    for row in reversed(SCHEDULES):
+        assert schedule_by_id(row.id).id == row.id
+
+
+def test_the_notified_set_path_is_a_state_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer import schedules
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ctx = context_for("fedora", checkout=tmp_path, read_models=_fake_models)
+    assert schedules.notified_path(ctx) == ctx.state_path.with_name("update-check.json")
+    assert schedules.notified_path(ctx) in vars(schedules)["_state_artifacts"](ctx)
+
+
 def test_the_table_is_closed_and_ordered() -> None:
     assert tuple(s.id for s in SCHEDULES) == (
         "tmp-cleanup",
@@ -111,6 +144,7 @@ def test_the_table_is_closed_and_ordered() -> None:
         "update-pi",
         "update-cursor-agent",
         "update-copilot",
+        "check-updates",
     )
     assert tuple(s.label for s in SCHEDULES) == (
         "tmp cleanup",
@@ -120,6 +154,7 @@ def test_the_table_is_closed_and_ordered() -> None:
         "pi update",
         "cursor-agent update",
         "copilot update",
+        "update check",
     )
     assert UPDATE_SCHEDULE_IDS == (
         "update-claude",
@@ -136,6 +171,7 @@ def test_the_table_is_closed_and_ordered() -> None:
         "pi",
         "cursor-agent",
         "copilot",
+        None,
     ]
     assert schedule_by_id("update-pi").target == "pi"
     with pytest.raises(KeyError):

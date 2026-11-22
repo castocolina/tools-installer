@@ -245,6 +245,7 @@ async def test_cells_from_state_and_log(tmp_path: Path, monkeypatch: pytest.Monk
             "! 12:00",
             "! 12:00",
             "running",
+            "never",
         ]
         assert cell(app, "update-claude", "every") == "6h 00:00"
         assert cell(app, "update-claude", "next") == "18:00"
@@ -674,9 +675,9 @@ async def test_encoding_and_width(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
         screen.status.set("one\ntwo\nthree", "warn")
         await pilot.pause()
-        assert table.region.height == 8
+        assert table.region.height == 9
         assert table.max_scroll_y == 0
-        assert detail.region.height == 4
+        assert detail.region.height == 3
 
 
 @pytest.mark.parametrize(
@@ -839,6 +840,40 @@ async def test_e_is_refused_before_the_modal_and_again_at_the_pick(
         assert (screen.status.text, screen.status.severity) == (_REMOVAL_REFUSAL, Severity.WARN)
         assert timer_of(env).read_bytes() == before
         app.end_mutation()
+
+
+async def test_the_check_row_shows_its_daily_cadence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        assert cell(app, "check-updates", "every") == "24h 09:00"
+        await move_to(pilot, screen, "check-updates")
+        assert "times: daily at 09:00 (local)" in screen.detail_text.splitlines()
+
+
+async def test_the_check_row_time_editor_is_daily(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = make_env(tmp_path, monkeypatch, os_key="fedora", present=EVERYTHING)
+    schedules.turn_on(env.ctx, "check-updates")
+    app = make_app(env, monkeypatch)
+    async with app.run_test(size=(80, 20)) as pilot:
+        screen = await open_schedules(app, pilot)
+        await move_to(pilot, screen, "check-updates")
+        await pilot.press("e")
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, ScheduleTimeScreen)
+        assert list(modal.query(Select[int])) == []
+        assert "Daily at (HH:MM, local time)" in [
+            str(label.content) for label in modal.query(Label)
+        ]
+        await type_and_submit(pilot, modal, "10:30")
+        await settle(app, pilot)
+        assert screen.status.text == "update check now runs daily at 10:30; next run at 10:30."
 
 
 async def test_tmp_cleanup_time_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
