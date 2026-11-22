@@ -60,6 +60,21 @@ def test_stamp_time_and_attempted_at_apply_one_validation() -> None:
     assert version_cache.attempted_at(_entry(checked_at="bad"), now=now) is None
 
 
+def test_old_manager_snapshot_without_per_manager_stamps_loads() -> None:
+    decoded = decode_manager_snapshot({"checked_at": "2026-01-01T00:00:00+00:00"})
+    assert decoded is not None
+    assert decoded.manager_checked_at == {}
+    assert decoded.checked_at == "2026-01-01T00:00:00+00:00"
+
+
+def test_deep_json_and_out_of_range_timestamp_are_unusable(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
+    path.write_bytes(b"[" * 30000 + b"]" * 30000)
+    assert load_version_cache(path) == {}
+    assert load_manager_snapshot(path) is None
+    assert version_cache.stamp_time("0001-01-01T00:00:00+23:00", now=datetime.now(UTC)) is None
+
+
 def test_an_invalid_utf8_cache_file_reads_as_empty(tmp_path: Path) -> None:
     path = tmp_path / "versions.json"
     path.write_bytes(b"\xff\xfe{")
@@ -110,6 +125,17 @@ def test_a_non_regular_cache_file_never_blocks_the_loaders(tmp_path: Path) -> No
     assert load_version_cache(link) == {"new": entry}
     assert load_manager_snapshot(link) == _snapshot()
     assert real.read_bytes() == original
+
+
+def test_oversized_write_preserves_the_readable_cache(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
+    entry = _entry(checked_at=None)
+    save_version_cache(path, {"old": entry})
+    before = path.read_bytes()
+    with pytest.raises(OSError):
+        save_version_cache(path, {"large": VersionCacheEntry("x" * (4 * 1024 * 1024), None)})
+    assert path.read_bytes() == before
+    assert load_version_cache(path) == {"old": entry}
 
 
 def test_the_cache_writer_replaces_a_final_symlink(tmp_path: Path) -> None:

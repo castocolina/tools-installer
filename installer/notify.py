@@ -11,6 +11,7 @@ import os
 import shutil
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from urllib.parse import quote
 
 from installer.run import TIMEOUT_CODE, CommandError, run_output
 from installer.sanitize import sanitize_log_line
@@ -60,7 +61,7 @@ def session_bus_environment(
     for path in candidates:
         try:
             if is_socket(path):
-                env[BUS_VARIABLE] = f"unix:path={path}"
+                env[BUS_VARIABLE] = f"unix:path={quote(str(path), safe='/')}"
                 break
         except OSError:
             continue

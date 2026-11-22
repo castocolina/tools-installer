@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import receipts
+from installer import receipts, schedules
 from installer.helper_assets import schedule_runner
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import Method, Tool
@@ -156,7 +156,7 @@ def test_the_hermetic_check_job_changes_only_the_allowed_files(
     assert len(result["git"]) == 4
     assert all(argv[:3] == ["git", "-C", str(checkout.resolve())] for argv in result["git"])
     assert [argv[3:] for argv in result["git"]] == [
-        ["rev-parse", "--abbrev-ref", "HEAD"],
+        ["symbolic-ref", "-q", "HEAD"],
         ["rev-parse", "--show-toplevel"],
         ["rev-parse", "HEAD"],
         ["ls-remote", "origin", "refs/heads/main"],
@@ -196,6 +196,117 @@ def test_the_hermetic_check_job_changes_only_the_allowed_files(
     if scenario == "link":
         assert not cache.is_symlink() and cache.is_file()
         assert (tmp_path / "target").read_bytes() == target_before
+
+
+def test_other_refresh_cannot_certify_cached_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    place_yq_with_receipt(tmp_path)
+    now = datetime.now(UTC)
+    service = real_service(
+        tmp_path, resolve_tag=lambda _: "v5.0.0", now=lambda: now, installed="v4.0.0"
+    )
+    save_version_cache(
+        service.cache_path,
+        {"yq": VersionCacheEntry("v5.0.0", (now - timedelta(hours=1)).isoformat())},
+    )
+    ctx = check_context(tmp_path, monkeypatch)
+    git = FakeGit(branch="feature")
+
+    def concurrent(argv: list[str]) -> str:
+        save_version_cache(service.cache_path, {"yq": VersionCacheEntry("v5.0.0", now.isoformat())})
+        return git(argv)
+
+    notify = FakeNotifier()
+    line, code = run_check(
+        [yq_tool()], refresh=service, notify=notify, context=ctx, git=concurrent, clock=lambda: now
+    )
+    assert code == 0 and line == "ok: 0 updates available" and not notify.calls
+
+
+def test_failed_cache_save_does_not_confirm_or_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    place_yq_with_receipt(tmp_path)
+    now = datetime.now(UTC)
+    service = real_service(
+        tmp_path, resolve_tag=lambda _: "v5.0.0", now=lambda: now, installed="v4.0.0"
+    )
+    service.cache_path.mkdir(parents=True)
+    ctx = check_context(tmp_path, monkeypatch)
+    notify = FakeNotifier()
+    line, code = run_check(
+        [yq_tool()],
+        refresh=service,
+        notify=notify,
+        context=ctx,
+        git=FakeGit(branch="feature"),
+        clock=lambda: now,
+    )
+    assert code == 0 and "cache not saved" in line
+    assert not notify.calls and not schedules.notified_path(ctx).exists()
+
+
+def test_partial_manager_failure_confirms_successful_manager(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(UTC)
+    tool = Tool(
+        id="rg",
+        name="rg",
+        category="search",
+        cmd="rg",
+        methods=(Method(kind="brew", params={"formula": "ripgrep"}),),
+    )
+    inventory = ManagerInventory(
+        brew_formulae={"ripgrep": "14.1.0"},
+        brew_casks={},
+        pnpm_globals=None,
+        uv_tools={},
+        brew_prefix=tmp_path / "brew",
+    )
+    outdated = OutdatedReport(
+        brew={"ripgrep": ManagerVersion("14.1.0", "14.1.1")}, cask={}, pnpm=None, uv={}
+    )
+    cache = tmp_path / "versions.json"
+    old = ManagerSnapshot(inventory, outdated, (now - timedelta(hours=7)).isoformat())
+    save_version_cache(cache, {}, managers=encode_manager_snapshot(old))
+
+    def read_inventory(**_kwargs: object) -> ManagerInventory:
+        return inventory
+
+    def read_outdated(**_kwargs: object) -> OutdatedReport:
+        return outdated
+
+    service = VersionRefreshService(
+        platform=Platform(os="macos", arch="amd64", immutable=False, has_brew=True),
+        cache_path=cache,
+        now=lambda: now,
+        home=tmp_path,
+        managed_bin_dir=tmp_path / "bin",
+        which=lambda cmd: str(tmp_path / "brew/bin" / cmd),
+        artifacts_for=lambda _tool: [],
+        read_inventory_fn=read_inventory,
+        read_outdated_fn=read_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: "pnpm",
+        bun_versions=lambda: {},
+        query=lambda *_args, **_kwargs: "",
+        probe_output=lambda _argv: "14.1.0",
+    )
+    notifier = FakeNotifier()
+    line, code = run_check(
+        [tool],
+        refresh=service,
+        notify=notifier,
+        context=check_context(tmp_path, monkeypatch),
+        git=FakeGit(branch="feature"),
+        clock=lambda: now,
+    )
+    assert code == 0 and line == "ok: 1 updates available"
+    assert notifier.calls
 
 
 def test_the_job_is_deterministic_on_a_second_run(
@@ -299,7 +410,7 @@ def test_stale_evidence_never_moves_the_notified_set_through_the_real_service(
         git=FakeGit(branch="feature"),
         clock=lambda: now,
     )
-    suffix = "; 1 lookups failed: rate limited: HTTP 403" if case == "stale_positive" else ""
+    suffix = "; 1 lookups failed: lookup failed for yq" if case == "stale_positive" else ""
     assert code == 0 and line == f"ok: {int(planted)} updates available{suffix}"
     state = service.state_of(tool.id)
     assert state is not None and state.version is not None and state.version.outdated

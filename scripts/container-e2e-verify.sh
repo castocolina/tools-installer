@@ -2519,7 +2519,10 @@ schedules_expected_cell() {
 }
 
 schedules_mark_checkout() {
-  if ! schedules_tester "touch \"\$HOME/.checkout-mark\""; then
+  local workspace
+  printf -v workspace '%q' "$TESTER_WORKSPACE"
+  SCHEDULES_CHECKOUT_COMMAND="set -o pipefail; find $workspace \\( -name .git -o -name .venv \\) -prune -o -type f -printf '%p %s\\n' | LC_ALL=C sort"
+  if ! SCHEDULES_CHECKOUT_BASELINE="$(schedules_tester "$SCHEDULES_CHECKOUT_COMMAND")"; then
     printf 'TRACER_SCHEDULE_CHECKOUT_PROBE_FAILED\n'
     return 1
   fi
@@ -2527,15 +2530,15 @@ schedules_mark_checkout() {
 
 schedules_checkout_verdict() {
   local out
-  if ! out="$(schedules_tester "find \"${TESTER_WORKSPACE}\" -newer \"\$HOME/.checkout-mark\" ! -type d ! -path '*/.venv/*' ! -path '*/.git/*'")"; then
+  if ! out="$(schedules_tester "$SCHEDULES_CHECKOUT_COMMAND")"; then
     printf 'TRACER_SCHEDULE_CHECKOUT_PROBE_FAILED\n'
     return 1
   fi
-  if [[ -n "$out" ]]; then
-    printf 'TRACER_SCHEDULE_CHECKOUT_TOUCHED id=%s path=%s\n' "$1" "${out%%$'\n'*}"
+  if [[ "$out" != "$SCHEDULES_CHECKOUT_BASELINE" ]]; then
+    printf 'TRACER_SCHEDULE_CHECKOUT_TOUCHED id=%s regular-file paths or sizes changed\n' "$1"
     return 1
   fi
-  printf 'TRACER_SCHEDULE_CHECKOUT_UNCHANGED id=%s\n' "$1"
+  printf 'TRACER_SCHEDULE_CHECKOUT_UNCHANGED id=%s regular-file paths and sizes outside .git and .venv; git self-check unexercised (workspace has no .git)\n' "$1"
 }
 
 # $1 is a copy of schedules.log, $2 a schedule id: that id's newest run must hold a start line and

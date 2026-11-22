@@ -408,9 +408,9 @@ def _latest_status(
                 digests=release.digests,
             )
             fetched = True
-        except (VersionError, OSError) as exc:
+        except (VersionError, OSError):
             if on_failure is not None:
-                on_failure(tool.id, str(exc))
+                on_failure(tool.id, "lookup failed")
             latest = entry.latest_version if entry is not None else None
             prior_digests: Mapping[str, str] = (
                 entry.digests
@@ -1772,8 +1772,20 @@ class VersionRefreshService:
                 outdated=previous.outdated if previous is not None else _EMPTY_OUTDATED,
                 checked_at=previous.checked_at if previous is not None else None,
                 failed_at=now_iso,
+                manager_checked_at=previous.manager_checked_at if previous is not None else {},
             )
             return failed, True, True
+        stamps = dict(snapshot.manager_checked_at) if snapshot is not None else {}
+        for name, valid in {
+            "brew": inventory.brew_formulae is not None and outdated.brew is not None,
+            "cask": inventory.brew_casks is not None
+            and outdated.cask is not None
+            and outdated.greedy is not None,
+            "pnpm": inventory.pnpm_globals is not None and outdated.pnpm is not None,
+            "uv": inventory.uv_tools is not None and outdated.uv is not None,
+        }.items():
+            if valid:
+                stamps[name] = now_iso
         if self._partial_manager_failure(inventory, outdated, platform=platform):
             # W3 (12-REVIEW.md, codex-sol-high): each manager reader swallows
             # its own CommandError/OSError into a `None` field rather than
@@ -1794,6 +1806,7 @@ class VersionRefreshService:
                 outdated=_merge_outdated(outdated, previous),
                 checked_at=previous.checked_at if previous is not None else None,
                 failed_at=now_iso,
+                manager_checked_at=stamps,
             )
             return merged, True, True
         return (
@@ -1802,6 +1815,7 @@ class VersionRefreshService:
                 outdated=outdated,
                 checked_at=now_iso,
                 failed_at=None,
+                manager_checked_at=stamps,
             ),
             True,
             False,
@@ -1834,7 +1848,7 @@ class VersionRefreshService:
         *,
         stale_after: timedelta = STALE_AFTER,
         on_failure: FailureSink | None = None,
-    ) -> None:
+    ) -> tuple[dict[str, ToolState], dict[str, VersionCacheEntry], ManagerSnapshot | None] | None:
         """Resolve every tool once and publish the pass with one swap.
 
         BLOCKING — call only from a worker thread. Read the result through
@@ -1858,7 +1872,7 @@ class VersionRefreshService:
                 raise failure[0]
             return
         try:
-            self._pass(
+            return self._pass(
                 tools,
                 seq=seq,
                 started_epoch=started_epoch,
@@ -1882,7 +1896,7 @@ class VersionRefreshService:
         started_epoch: int,
         stale_after: timedelta = STALE_AFTER,
         on_failure: FailureSink | None = None,
-    ) -> None:
+    ) -> tuple[dict[str, ToolState], dict[str, VersionCacheEntry], ManagerSnapshot | None] | None:
         # D-14: brew is re-read every pass. Every helper of this pass gets this
         # one value; none reads the shared `self._platform`, which an
         # overlapping pass may replace mid-pass (review M5). The evidence snapshot comes first:
@@ -2087,6 +2101,7 @@ class VersionRefreshService:
                     self._warning = None
 
             self._write_or_queue(save_pass)
+            return fresh, {**cache, **produced}, snapshot
 
 
 def uninstall_group(state: ToolState | None) -> UninstallState | None:

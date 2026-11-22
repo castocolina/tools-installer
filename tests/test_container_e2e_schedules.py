@@ -993,31 +993,34 @@ def test_a_stale_success_cannot_certify_the_check_launch(tmp_path: Path) -> None
     assert "SCHEDULE_JOURNAL check-unit.service" in result.stdout
 
 
-@pytest.mark.parametrize(
-    ("output", "status", "expected"),
-    [
-        ("", 0, "UNCHANGED"),
-        ("workspace/installer/__pycache__/x.pyc", 0, "TOUCHED"),
-        ("", 1, "PROBE_FAILED"),
-    ],
-)
-def test_the_checkout_probe(tmp_path: Path, output: str, status: int, expected: str) -> None:
-    stubs = f"""schedules_tester() {{
-  printf '%s\\n' "$1" >> "$CALLS"
-  case "$1" in find*) printf '%s' {shlex.quote(output)}; return {status} ;; esac
-}}"""
+@pytest.mark.parametrize("change", ["none", "delete", "resize", "add"])
+def test_the_checkout_probe(tmp_path: Path, change: str) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file").write_text("before")
+    changes = {
+        "none": ":",
+        "delete": 'rm "$TESTER_WORKSPACE/file"',
+        "resize": 'printf x > "$TESTER_WORKSPACE/file"',
+        "add": 'touch "$TESTER_WORKSPACE/new"',
+    }
     result = _run(
-        _script("schedules_mark_checkout", "schedules_checkout_verdict", stubs=stubs)
-        + "\nschedules_mark_checkout && schedules_checkout_verdict check-updates\n",
+        _script(
+            "schedules_mark_checkout",
+            "schedules_checkout_verdict",
+            variables={"TESTER_WORKSPACE": str(workspace)},
+            stubs='schedules_tester() { bash -c "$1"; }',
+        )
+        + "\nschedules_mark_checkout\n"
+        + changes[change]
+        + "\nschedules_checkout_verdict check-updates\n",
         tmp_path / "home",
     )
-    assert result.returncode == (0 if expected == "UNCHANGED" else 1)
-    assert f"TRACER_SCHEDULE_CHECKOUT_{expected}" in result.stdout
-    calls = _calls(tmp_path / "home")
-    assert "touch" in calls[0]
-    assert all(word in calls[1] for word in ("-newer", "! -type d", ".venv", ".git"))
-    if output:
-        assert f"path={output}" in result.stdout
+    assert result.returncode == (0 if change == "none" else 1)
+    assert (
+        f"TRACER_SCHEDULE_CHECKOUT_{'UNCHANGED' if change == 'none' else 'TOUCHED'}"
+        in result.stdout
+    )
 
 
 def test_a_baseline_read_error_fails_closed(tmp_path: Path) -> None:

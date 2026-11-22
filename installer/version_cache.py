@@ -53,6 +53,10 @@ def _empty_digest_map() -> dict[str, str]:
     return {}
 
 
+def _empty_manager_stamps() -> dict[str, str | None]:
+    return {}
+
+
 @dataclass(frozen=True)
 class VersionCacheEntry:
     latest_version: str | None
@@ -67,6 +71,7 @@ class ManagerSnapshot:
     outdated: OutdatedReport
     checked_at: str | None
     failed_at: str | None = None
+    manager_checked_at: Mapping[str, str | None] = field(default_factory=_empty_manager_stamps)
 
 
 def _parse_iso(value: object, *, now: datetime) -> datetime | None:
@@ -88,7 +93,10 @@ def _parse_iso(value: object, *, now: datetime) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         return None
-    aware = parsed.astimezone(UTC)
+    try:
+        aware = parsed.astimezone(UTC)
+    except OverflowError:
+        return None
     if aware > now + FUTURE_SKEW:
         return None
     return aware
@@ -173,7 +181,7 @@ def _read_json(path: Path) -> object | None:
     try:
         data = read_capped(path, CACHE_CAP, follow_symlinks=True)
         return json.loads(data.decode("utf-8")) if data is not None else None
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError, OverflowError):
         return None
 
 
@@ -225,13 +233,16 @@ def save_version_cache(
         },
         "managers": managers_out,
     }
+    data = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+    if len(data) > CACHE_CAP:
+        raise OSError("version cache exceeds size limit")
     ensure_dir(path.parent)
     try:
         info = path.lstat()
         mode = stat.S_IMODE(info.st_mode) if stat.S_ISREG(info.st_mode) else 0o600
     except FileNotFoundError:
         mode = 0o600
-    atomic_replace_entry(path, (json.dumps(payload, indent=2) + "\n").encode("utf-8"), mode=mode)
+    atomic_replace_entry(path, data, mode=mode)
 
 
 def is_stale(
@@ -375,6 +386,7 @@ def encode_manager_snapshot(snapshot: ManagerSnapshot) -> dict[str, object]:
         },
         "checked_at": snapshot.checked_at,
         "failed_at": snapshot.failed_at,
+        "manager_checked_at": dict(snapshot.manager_checked_at),
     }
 
 
@@ -393,6 +405,11 @@ def decode_manager_snapshot(raw: object) -> ManagerSnapshot | None:
         outdated=_decode_outdated(mapping.get("outdated")),
         checked_at=checked if isinstance(checked, str) else None,
         failed_at=failed if isinstance(failed, str) else None,
+        manager_checked_at={
+            key: value
+            for key, value in (_as_object(mapping.get("manager_checked_at")) or {}).items()
+            if isinstance(value, (str, type(None)))
+        },
     )
 
 

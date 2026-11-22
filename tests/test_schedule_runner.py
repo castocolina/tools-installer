@@ -498,7 +498,15 @@ def test_child_env_passes_the_session_bus_address(
 ) -> None:
     address = "unix:path=/run/user/1000/bus"
     monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", address)
-    assert _captured_child_env(tmp_path, monkeypatch)["DBUS_SESSION_BUS_ADDRESS"] == address
+    assert "DBUS_SESSION_BUS_ADDRESS" not in _captured_child_env(tmp_path, monkeypatch)
+    checkout = _checkout(tmp_path)
+    uv = _script(
+        tmp_path / "other", "uv", 'echo "${DBUS_SESSION_BUS_ADDRESS-unset}" > bus; echo "ok: done"'
+    )
+    assert _check_job(tmp_path, checkout, uv)[0] == 0
+    assert (checkout / "bus").read_text().strip() == address
+    assert _update(tmp_path, uv, checkout)[0] == 0
+    assert (checkout / "bus").read_text().strip() == "unset"
 
 
 def test_child_env_leaves_an_unset_bus_address_unset(

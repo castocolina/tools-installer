@@ -29,7 +29,8 @@ from installer.update import (
     perform_update,
     resolve_update_argv,
 )
-from installer.version_status import FailureSink
+from installer.version_cache import ManagerSnapshot, VersionCacheEntry
+from installer.version_status import FailureSink, ToolState
 from tests.compose_patch import patch_composition
 from tests.update_check_doubles import (
     FakeGit,
@@ -200,9 +201,9 @@ def test_a_manual_check_takes_the_lock_skips_when_busy_and_releases_it(
 
     def observing(
         tools: Sequence[Tool], *, stale_after: timedelta, on_failure: FailureSink | None
-    ) -> None:
+    ) -> tuple[dict[str, ToolState], dict[str, VersionCacheEntry], ManagerSnapshot | None]:
         seen.append(runlock.holder(path))
-        original(tools, stale_after=stale_after, on_failure=on_failure)
+        return original(tools, stale_after=stale_after, on_failure=on_failure)
 
     monkeypatch.setattr(refresh, "refresh", observing)
     assert run_schedule("check-updates", deps, parent_holds_lock=False) == (
@@ -283,25 +284,6 @@ def test_setup_wires_the_check_services(monkeypatch: pytest.MonkeyPatch) -> None
     patch_composition(monkeypatch, "_build_services", build)
     deps = vars(setup)["_schedule_run_deps"]([_tool("claude")], _FEDORA)
     assert deps.refresh is refresh
-    assert deps.git is update_check.git_for_check
-
-
-def test_setup_wires_the_isolated_git_runner(monkeypatch: pytest.MonkeyPatch) -> None:
-    class Refresh:
-        def resolve_owner(self, tool: Tool) -> ManagerOwnership:
-            return _ownership(tool, "unknown")
-
-    def build(tools: list[Tool], platform: Platform, **kwargs: object) -> tuple[object, ...]:
-        updates = UpdateService(
-            platform=platform,
-            managed_packages=lambda: (),
-            replay_globals=lambda _packages: (),
-            reresolve_ownership=lambda _tool: _ownership(tools[0], "unknown"),
-        )
-        return Refresh(), updates, None, None
-
-    patch_composition(monkeypatch, "_build_services", build)
-    deps = vars(setup)["_schedule_run_deps"]([_tool("claude")], _FEDORA)
     assert deps.git is update_check.git_for_check
 
 

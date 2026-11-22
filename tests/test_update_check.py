@@ -60,6 +60,12 @@ def test_the_git_runner_is_isolated_bounded_and_credential_free(
         "credential.helper=",
         "-c",
         "core.askPass=",
+        "-c",
+        "http.cookieFile=",
+        "-c",
+        "http.saveCookies=false",
+        "-c",
+        "http.extraHeader=",
         "-C",
         "/w",
         "rev-parse",
@@ -80,6 +86,7 @@ def test_the_git_runner_is_isolated_bounded_and_credential_free(
 @pytest.mark.parametrize(
     "raw",
     [
+        b"[" * 30000 + b"]" * 30000,
         b"{not json",
         b"\xff\xfe",
         b'{"version":2,"notified":[]}',
@@ -163,7 +170,12 @@ def test_fresh_ids_reads_the_stamp_of_the_right_source(tmp_path: Path) -> None:
     entries = {name: VersionCacheEntry("2", stamp) for name, stamp in stamps.items()}
     entries.update({name: VersionCacheEntry("2", older) for name in ("brew", "cask", "pnpm", "uv")})
     path = tmp_path / "cache"
-    snapshot = ManagerSnapshot(empty_inventory(), empty_outdated(), now.isoformat())
+    snapshot = ManagerSnapshot(
+        empty_inventory(),
+        empty_outdated(),
+        now.isoformat(),
+        manager_checked_at={name: now.isoformat() for name in ("brew", "cask", "pnpm", "uv")},
+    )
     save_version_cache(path, entries, managers=encode_manager_snapshot(snapshot))
     assert update_check.fresh_ids(tools, states.get, path, started=now, now=now) == frozenset(
         {"equal", "brew", "cask", "pnpm", "uv"}
@@ -172,7 +184,14 @@ def test_fresh_ids_reads_the_stamp_of_the_right_source(tmp_path: Path) -> None:
         {name: VersionCacheEntry("2", now.isoformat()) for name in ("brew", "cask", "pnpm", "uv")}
     )
     save_version_cache(
-        path, entries, managers=encode_manager_snapshot(replace(snapshot, checked_at=older))
+        path,
+        entries,
+        managers=encode_manager_snapshot(
+            replace(
+                snapshot,
+                manager_checked_at={name: older for name in ("brew", "cask", "pnpm", "uv")},
+            )
+        ),
     )
     assert update_check.fresh_ids(tools, states.get, path, started=now, now=now) == frozenset(
         {"equal"}
@@ -219,7 +238,7 @@ def test_next_set_unknown_keeps_prior_membership() -> None:
         "j": current_state(tools[9]),
     }
     prior = frozenset("abcdefghij") | {"tools-installer", "outside"}
-    fresh = frozenset("abcdehij")
+    fresh = frozenset("abchij")
     assert update_check.next_set(
         tools, states.get, (False, "origin query failed"), prior, fresh
     ) == frozenset("abcdefgh") | {"tools-installer"}
@@ -233,8 +252,24 @@ def test_next_set_unknown_keeps_prior_membership() -> None:
     )
 
 
+def test_attempt_order_ignores_overflowing_timestamp() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    tool = tool_named("a")
+    cache = {"a": VersionCacheEntry("1", "0001-01-01T00:00:00+23:59")}
+    assert update_check.oldest_checked_first([tool], cache, now=now) == [tool]
+
+
+def test_unavailable_is_confirmed_absent() -> None:
+    tool = tool_named("a")
+    state = replace(absent_state(tool), health=Health.UNAVAILABLE)
+    assert (
+        update_check.next_set([tool], lambda _: state, (False, None), frozenset({"a"}), frozenset())
+        == frozenset()
+    )
+
+
 def test_the_message_names_ids_only_and_is_bounded() -> None:
-    message = vars(update_check)["_message"]
+    message = update_check.message
     summary, body = message({"one"})
     assert (summary, body) == ("1 tool update available", "one")
     summary, body = message({f"t{i:02d}" for i in range(12)})
@@ -245,9 +280,12 @@ def test_the_message_names_ids_only_and_is_bounded() -> None:
 
 
 def test_failed_reason_text() -> None:
-    assert update_check.failed_reason(CommandError(["x"], 1, detail="boom")) == "boom"
-    assert update_check.failed_reason(OSError("disk full")) == "disk full"
-    assert update_check.failed_reason(ValueError()) == "ValueError"
+    assert (
+        update_check.failed_reason(CommandError(["x"], 1, detail="secret-token"))
+        == "refresh failed"
+    )
+    assert update_check.failed_reason(OSError("secret-token")) == "refresh failed"
+    assert update_check.failed_reason(ValueError()) == "refresh failed"
 
 
 def test_the_result_line_fits_the_runner_cap_whatever_the_reasons() -> None:
@@ -264,7 +302,7 @@ def test_the_result_line_fits_the_runner_cap_whatever_the_reasons() -> None:
     assert vars(schedule_runner)["_MAX_REASON"] == update_check.RESULT_LIMIT
 
 
-BRANCH = ("rev-parse", "--abbrev-ref", "HEAD")
+BRANCH = ("symbolic-ref", "-q", "HEAD")
 HEAD = ("rev-parse", "HEAD")
 REMOTE = ("ls-remote", "origin", "refs/heads/main")
 OBJECT = ("cat-file", "-e", SHA_B)
@@ -279,17 +317,46 @@ def test_the_hardened_self_check_issues_only_read_only_subcommands(tmp_path: Pat
     (tmp_path / "file").write_bytes(b"content")
     before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     for behind, expected in (
-        (True, ["rev-parse", "rev-parse", "rev-parse", "ls-remote", "config", "cat-file"]),
-        (False, ["rev-parse", "rev-parse", "rev-parse", "ls-remote"]),
+        (True, ["symbolic-ref", "rev-parse", "rev-parse", "ls-remote", "config", "cat-file"]),
+        (False, ["symbolic-ref", "rev-parse", "rev-parse", "ls-remote"]),
     ):
         git = FakeGit(behind=behind)
         assert update_check.installer_behind(tmp_path, git) == (behind, None)
         commands = [call[3] for call in git.calls]
         assert commands == expected
-        assert set(commands) <= {"rev-parse", "ls-remote", "cat-file", "merge-base", "config"}
+        assert set(commands) <= {
+            "symbolic-ref",
+            "rev-parse",
+            "ls-remote",
+            "cat-file",
+            "merge-base",
+            "config",
+        }
         assert not set(commands) & {"fetch", "pull", "checkout", "merge", "reset", "clone"}
     after = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     assert after == before
+
+
+def test_branch_switch_preserves_installer_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = check_context(tmp_path, monkeypatch)
+    refresh = FakeRefresher(tmp_path / "cache", {})
+    notify = FakeNotifier()
+    for branch in ("main", "feature", "main"):
+        update_check.run_check(
+            [], refresh=refresh, notify=notify, context=ctx, git=FakeGit(branch=branch)
+        )
+    assert len(notify.calls) == 1
+    assert update_check.read_notified(schedules.notified_path(ctx))[0] == frozenset(
+        {"tools-installer"}
+    )
+
+
+def test_ambiguous_tag_does_not_hide_main(tmp_path: Path) -> None:
+    git = FakeGit()
+    git.answers[("rev-parse", "--abbrev-ref", "HEAD")] = "heads/main\n"
+    assert update_check.installer_behind(tmp_path, git) == (True, None)
 
 
 def test_a_checkout_that_is_not_its_own_worktree_root_is_skipped(tmp_path: Path) -> None:
@@ -354,10 +421,17 @@ def test_a_checkout_behind_main_reports_behind(tmp_path: Path) -> None:
     assert update_check.installer_behind(tmp_path, git) == (True, None)
     assert all(call[:3] == ["git", "-C", str(tmp_path)] for call in git.calls)
     commands = [call[3] for call in git.calls]
-    assert commands[0] == "rev-parse"
+    assert commands[0] == "symbolic-ref"
     assert commands.index("ls-remote") < commands.index("cat-file")
     assert git.calls[-1][-3:] == ["cat-file", "-e", SHA_B]
-    assert set(commands) <= {"rev-parse", "ls-remote", "cat-file", "merge-base", "config"}
+    assert set(commands) <= {
+        "symbolic-ref",
+        "rev-parse",
+        "ls-remote",
+        "cat-file",
+        "merge-base",
+        "config",
+    }
     after = {
         p.relative_to(tmp_path): sha256(p.read_bytes()).digest()
         for p in tmp_path.rglob("*")
@@ -402,7 +476,7 @@ def test_a_branch_other_than_main_or_a_detached_head_is_a_silent_skip(
     tmp_path: Path, branch: str
 ) -> None:
     git = FakeGit(branch=branch)
-    assert update_check.installer_behind(tmp_path, git) == (False, None)
+    assert update_check.installer_behind(tmp_path, git) == (None, None)
     assert len(git.calls) == 1
 
 
@@ -689,7 +763,7 @@ def test_a_corrupt_or_invalid_utf8_state_file_is_rewritten_and_a_directory_is_re
     path.mkdir()
     (path / "keep").write_bytes(b"keep")
     line, code = run()
-    assert code == 0 and line.startswith("ok: 1 updates available; notified set not saved: ")
+    assert code == 0 and line.startswith("ok: 1 updates available; notified set not saved")
     assert len(notify.calls) == 2 and (path / "keep").read_bytes() == b"keep"
     refresh.corrupt_cache = b"\xff\xfe{"
     assert run()[0].startswith("ok:")
@@ -735,7 +809,7 @@ def test_a_write_failure_is_a_clause_not_a_failed_run(
     monkeypatch.setattr(update_check, "atomic_replace_entry", fail)
     assert update_check.run_check(
         tools, refresh=refresh, notify=FakeNotifier(), context=ctx, git=FakeGit(branch="feature")
-    ) == ("ok: 2 updates available; notified set not saved: disk full", 0)
+    ) == ("ok: 2 updates available; notified set not saved", 0)
 
 
 def test_the_installer_clause_is_independent_of_notification(
@@ -773,11 +847,11 @@ def test_clauses_are_ordered_and_split_where_the_flow_splits(
 ) -> None:
     ctx = check_context(tmp_path, monkeypatch)
     tools = [tool_named(c) for c in "ab"]
-    reason = "failed to resolve tag for owner/a: HTTP Error 403: rate limit exceeded"
+    reason = "lookup failed for a"
     refresh = FakeRefresher(
         tmp_path / "cache",
         {t.id: outdated_state(t) for t in tools},
-        failures=[("a", reason + "\x07\nsecret"), ("b", "other")],
+        failures=[("a", "planted-token\x07\nsecret"), ("b", "other")],
     )
     notify = FakeNotifier()
 
@@ -805,14 +879,17 @@ def test_clauses_are_ordered_and_split_where_the_flow_splits(
     monkeypatch.setattr(update_check, "atomic_replace_entry", fail)
     assert run(FakeGit()) == (
         f"ok: 3 updates available; 2 lookups failed: {reason}"
-        "; installer behind origin/main; notified set not saved: disk full",
+        "; installer behind origin/main; notified set not saved",
         0,
     )
 
 
 @pytest.mark.parametrize(
     ("error", "reason"),
-    [(CommandError(["x"], 1, detail="boom"), "boom"), (OSError("disk full"), "disk full")],
+    [
+        (CommandError(["x"], 1, detail="boom"), "refresh failed"),
+        (OSError("disk full"), "refresh failed"),
+    ],
 )
 def test_a_failing_refresh_is_a_failed_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception, reason: str

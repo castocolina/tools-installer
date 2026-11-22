@@ -79,8 +79,7 @@ _KILL_GRACE = 10  # seconds a group gets between SIGTERM and SIGKILL, and for th
 # The house child policy; source: installer/run.py CHILD_ENV (this file cannot import it).
 _CHILD_ENV = {"HOMEBREW_NO_SUDO": "1", "HOMEBREW_NO_AUTOREMOVE": "1"}
 # Passed through when present: the unit Environment carries the installing shell's proxy,
-# certificate and PNPM_HOME values (24.2 F8). The user manager supplies the session bus
-# address for the update check's notification child (34 D-17); everything else stays closed.
+# certificate and PNPM_HOME values (24.2 F8); everything else stays closed.
 _PASSED_ENV = (
     "PATH",
     "HOME",
@@ -96,7 +95,6 @@ _PASSED_ENV = (
     "SSL_CERT_FILE",
     "REQUESTS_CA_BUNDLE",
     "NODE_EXTRA_CA_CERTS",
-    "DBUS_SESSION_BUS_ADDRESS",
 )
 _TOOL_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 _DELETED = re.compile(r"^deleted: (\d+)\s*$", re.MULTILINE)
@@ -345,7 +343,18 @@ def _update(
         ],
         timeout=_UPDATE_TIMEOUT,
         cwd=Path(installer),
-        extra_env={"PYTHONDONTWRITEBYTECODE": "1"} if readonly else None,
+        extra_env=(
+            {
+                "PYTHONDONTWRITEBYTECODE": "1",
+                **(
+                    {"DBUS_SESSION_BUS_ADDRESS": os.environ["DBUS_SESSION_BUS_ADDRESS"]}
+                    if os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+                    else {}
+                ),
+            }
+            if readonly
+            else None
+        ),
     )
     if child.problem == "timed out":
         return f"failed: the {what} timed out"

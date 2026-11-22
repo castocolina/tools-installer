@@ -74,7 +74,7 @@ def test_the_contract_phase_35_inherits_is_in_place() -> None:
     assert defaults["notify"] is notify.no_notifier
     assert defaults["refresh"] is None
     assert defaults["git"] is None
-    assert "DBUS_SESSION_BUS_ADDRESS" in vars(schedule_runner)["_PASSED_ENV"]
+    assert "DBUS_SESSION_BUS_ADDRESS" not in vars(schedule_runner)["_PASSED_ENV"]
     assert notify.Notifier == Callable[[str, str], str | None]
 
 
@@ -96,7 +96,7 @@ def test_the_notifier_seam_accepts_a_typed_fake(
 
 def test_the_runner_environment_equals_the_unit_keys_plus_the_two_runner_only_keys() -> None:
     passed = set(vars(schedule_runner)["_PASSED_ENV"])
-    expected = set(daemon.ENVIRONMENT_KEYS) | {"LANG", "DBUS_SESSION_BUS_ADDRESS"}
+    expected = set(daemon.ENVIRONMENT_KEYS) | {"LANG"}
     assert passed == expected
     assert "DBUS_SESSION_BUS_ADDRESS" not in daemon.ENVIRONMENT_KEYS
     assert all("TOKEN" not in key for key in passed | set(daemon.ENVIRONMENT_KEYS))

@@ -7852,7 +7852,7 @@ def test_the_budget_and_the_sink_are_shared_by_github_npm_and_bun_fetches(
     cached = load_version_cache(path)
     if fail:
         assert [item[0] for item in failures] == [tool.id for tool in tools[:20]]
-        assert all("rate limited" in reason for _, reason in failures)
+        assert all(reason == "lookup failed" for _, reason in failures)
         for tool in tools[:20]:
             assert cached[tool.id] == replace(seeded[tool.id], failed_at=_STATE_NOW.isoformat())
     else:
@@ -7964,7 +7964,7 @@ def test_a_failing_lookup_goes_to_the_sink_and_not_to_the_caller(tmp_path: Path)
         on_failure=lambda tool_id, reason: failures.append((tool_id, reason)),
     )
     assert len(calls) == len(failures) == 2
-    assert all("rate limited" in reason for _, reason in failures)
+    assert all(reason == "lookup failed" for _, reason in failures)
     assert load_version_cache(path) == {
         key: replace(value, failed_at=_STATE_NOW.isoformat()) for key, value in seeded.items()
     }

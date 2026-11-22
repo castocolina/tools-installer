@@ -17,7 +17,7 @@ from installer.run import CommandError
 from installer.schedule_run import RunDeps
 from installer.update import UpdateService
 from installer.update_check import GitRunner, Refresher
-from installer.version_cache import VersionCacheEntry, save_version_cache
+from installer.version_cache import ManagerSnapshot, VersionCacheEntry, save_version_cache
 from installer.version_status import FailureSink, ToolState, VersionRefreshService, VersionStatus
 from tests.state_doubles import MACOS, pass_state
 
@@ -65,6 +65,7 @@ def unknown_state(tool: Tool) -> ToolState:
 
 def check_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> schedules.ScheduleContext:
     monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "co").mkdir(parents=True, exist_ok=True)
     return schedules.context_for(
         "fedora", checkout=tmp_path / "co", read_models=lambda _agent: None
     )
@@ -134,6 +135,7 @@ class FakeRefresher:
         elif seed_cache is not None:
             save_version_cache(cache_path, seed_cache)
         self.cache_path = cache_path
+        self.warning: str | None = None
         self.states = dict(states)
         self.failures = failures
         self.raises = raises
@@ -144,7 +146,7 @@ class FakeRefresher:
 
     def refresh(
         self, tools: Sequence[Tool], *, stale_after: timedelta, on_failure: FailureSink | None
-    ) -> None:
+    ) -> tuple[dict[str, ToolState], dict[str, VersionCacheEntry], ManagerSnapshot | None]:
         self.calls.append((tuple(tools), stale_after, on_failure))
         if self.raises is not None:
             raise self.raises
@@ -158,6 +160,15 @@ class FakeRefresher:
             stamp = self.clock().isoformat()
             ids = self.states if self.stamped is None else self.stamped
             save_version_cache(self.cache_path, {i: VersionCacheEntry("2", stamp) for i in ids})
+        entries = (
+            {}
+            if self.corrupt_cache is not None
+            else {
+                i: VersionCacheEntry("2", self.clock().isoformat())
+                for i in (self.states if self.stamped is None else self.stamped)
+            }
+        )
+        return self.states.copy(), entries, None
 
     def state_of(self, tool_id: str) -> ToolState | None:
         return self.states.get(tool_id)
@@ -200,8 +211,10 @@ class FakeGit:
             if isinstance(answer, CommandError):
                 raise answer
             return answer
-        if args == ("rev-parse", "--abbrev-ref", "HEAD"):
-            return self.branch + "\n"
+        if args == ("symbolic-ref", "-q", "HEAD"):
+            if self.branch == "HEAD":
+                raise CommandError(argv, 1)
+            return "refs/heads/" + self.branch + "\n"
         if args == ("rev-parse", "--show-toplevel"):
             return str(self.toplevel if self.toplevel is not None else argv[2]) + "\n"
         if args == ("config", "--get-regexp", r"^(extensions\.partialclone|remote\..*\.promisor)$"):

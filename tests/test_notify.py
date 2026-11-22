@@ -95,6 +95,7 @@ def test_notify_send_passes_the_bus_address_when_set() -> None:
     ("runtime", "sockets", "errors", "expected"),
     [
         ("/r", ["/r/bus"], [], "unix:path=/r/bus"),
+        ("/r,a;b", ["/r,a;b/bus"], [], "unix:path=/r%2Ca%3Bb/bus"),
         (None, ["/run/user/1234/bus"], [], "unix:path=/run/user/1234/bus"),
         ("/r", ["/run/user/1234/bus"], [], "unix:path=/run/user/1234/bus"),
         ("/r", ["/r/bus", "/run/user/1234/bus"], [], "unix:path=/r/bus"),
