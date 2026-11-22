@@ -1278,7 +1278,7 @@ class _RecordingRefreshService(FrozenStateService):
         )
         self.asked: list[str] = []
 
-    def refresh(self, tools: Sequence[Tool]) -> None:
+    def refresh(self, tools: Sequence[Tool], **_kwargs: object) -> None:
         for tool in tools:
             self.asked.append(tool.id)
 
@@ -4699,7 +4699,7 @@ async def test_update_outcome_survives_state_invalidation_without_followup_refre
     tmp_path: Path,
 ) -> None:
     class _RefreshWouldFail(_RecordingRefreshService):
-        def refresh(self, tools: Sequence[Tool]) -> None:
+        def refresh(self, tools: Sequence[Tool], **_kwargs: object) -> None:
             self.asked.extend(tool.id for tool in tools)
             raise OSError("version refresh exploded")
 

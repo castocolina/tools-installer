@@ -8,7 +8,7 @@ test-built service reads the developer's home (checker W5).
 import threading
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from installer.engine import ChecksumPolicy, InstallOutcome
@@ -25,7 +25,9 @@ from installer.receipts import Receipt
 from installer.run import Runner
 from installer.uninstall import RemovalPlan
 from installer.update import UpdateOutcome, UpdateService, UpdateTarget
+from installer.version_cache import STALE_AFTER
 from installer.version_status import (
+    FailureSink,
     Health,
     ToolState,
     VersionRefreshService,
@@ -237,8 +239,14 @@ class FrozenStateService(VersionRefreshService):
         """
         self._present = answer
 
-    def refresh(self, tools: Sequence[Tool]) -> None:
-        del tools
+    def refresh(
+        self,
+        tools: Sequence[Tool],
+        *,
+        stale_after: timedelta = STALE_AFTER,
+        on_failure: FailureSink | None = None,
+    ) -> None:
+        del tools, stale_after, on_failure
         self.passes += 1
         self.publish([*self._states.values(), *self.queued])
         self.queued = ()
@@ -278,7 +286,7 @@ class HeldRefreshService(FrozenStateService):
         self.release_timeout = release_timeout
         self.calls: list[frozenset[str]] = []
 
-    def refresh(self, tools: Sequence[Tool]) -> None:
+    def refresh(self, tools: Sequence[Tool], **_kwargs: object) -> None:
         self.calls.append(frozenset(tool.id for tool in tools))
         if not self.release.wait(timeout=self.release_timeout):
             raise TimeoutError("HeldRefreshService was never released")

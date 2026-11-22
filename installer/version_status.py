@@ -47,9 +47,9 @@ import re
 import shlex
 import shutil
 import threading
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, cast
@@ -119,6 +119,7 @@ from installer.tweaks import (
 from installer.uninstall import RemovalPlan, plan_uninstall, removal_plan
 from installer.update import update_refusal
 from installer.version_cache import (
+    STALE_AFTER,
     ManagerSnapshot,
     VersionCacheEntry,
     encode_manager_snapshot,
@@ -140,6 +141,9 @@ from installer.versions import (
     resolve_github_tag,
     resolve_npm_latest,
 )
+
+# Receives the tool id and resolver failure reason.
+FailureSink = Callable[[str, str], None]
 
 MAX_FETCHES_PER_REFRESH = 20
 
@@ -342,6 +346,8 @@ def resolve_github_release_status(
     allow_fetch: bool = True,
     ownership: ManagerOwnership | None = None,
     unresolved: str | None = None,
+    stale_after: timedelta = STALE_AFTER,
+    on_failure: FailureSink | None = None,
 ) -> tuple[VersionStatus, VersionCacheEntry | None]:
     """The GitHub latest-version status: `_latest_status` reading one release."""
     return _latest_status(
@@ -354,6 +360,8 @@ def resolve_github_release_status(
         allow_fetch=allow_fetch,
         ownership=ownership,
         unresolved=unresolved,
+        stale_after=stale_after,
+        on_failure=on_failure,
     )
 
 
@@ -369,6 +377,8 @@ def _latest_status(
     ownership: ManagerOwnership | None,
     unresolved: str | None,
     installed: str | None = None,
+    stale_after: timedelta = STALE_AFTER,
+    on_failure: FailureSink | None = None,
 ) -> tuple[VersionStatus, VersionCacheEntry | None]:
     """Probe the installed tool, optionally fetch the latest tag, build status.
 
@@ -387,7 +397,7 @@ def _latest_status(
     fetched = False
     latest: str | None
     new_entry: VersionCacheEntry | None
-    if allow_fetch and should_fetch(entry, now=now):
+    if allow_fetch and should_fetch(entry, now=now, stale_after=stale_after):
         try:
             release = read_release()
             latest = release.tag
@@ -398,7 +408,9 @@ def _latest_status(
                 digests=release.digests,
             )
             fetched = True
-        except (VersionError, OSError):
+        except (VersionError, OSError) as exc:
+            if on_failure is not None:
+                on_failure(tool.id, str(exc))
             latest = entry.latest_version if entry is not None else None
             prior_digests: Mapping[str, str] = (
                 entry.digests
@@ -414,10 +426,10 @@ def _latest_status(
     else:
         latest = entry.latest_version if entry is not None else None
         new_entry = None
-    if not allow_fetch and should_fetch(entry, now=now):
+    if not allow_fetch and should_fetch(entry, now=now, stale_after=stale_after):
         stale = True
     else:
-        stale = False if fetched else is_stale(entry, now=now)
+        stale = False if fetched else is_stale(entry, now=now, stale_after=stale_after)
     outdated = (
         is_outdated(installed, latest) if installed is not None and latest is not None else None
     )
@@ -552,6 +564,8 @@ def resolve_status(
     allow_fetch: bool = True,
     unresolved: str | None = None,
     resolve_npm: Callable[[str], str] = resolve_npm_latest,
+    stale_after: timedelta = STALE_AFTER,
+    on_failure: FailureSink | None = None,
 ) -> tuple[VersionStatus, VersionCacheEntry | None]:
     """Pick the latest-version source from ownership.owner, never from rank.
 
@@ -575,6 +589,8 @@ def resolve_status(
                 allow_fetch=allow_fetch,
                 ownership=ownership,
                 unresolved=unresolved,
+                stale_after=stale_after,
+                on_failure=on_failure,
             )
         elif npm_pkg is not None:
             latest_source = _latest_status(
@@ -587,6 +603,8 @@ def resolve_status(
                 allow_fetch=allow_fetch,
                 ownership=ownership,
                 unresolved=unresolved,
+                stale_after=stale_after,
+                on_failure=on_failure,
             )
         if latest_source is not None:
             status, new_entry = latest_source
@@ -630,6 +648,8 @@ def resolve_status(
             ownership=ownership,
             unresolved=unresolved,
             installed=ownership.current_version,
+            stale_after=stale_after,
+            on_failure=on_failure,
         )
         listed = (read_bun_globals() or {}).get(package)
         held = None if listed is None else caret_major(listed.range)
@@ -1056,6 +1076,22 @@ class ToolState:
         return self.health in _PRESENT_HEALTH
 
 
+def outdated_ids(states: Iterable[ToolState | None]) -> frozenset[str]:
+    """Return the set the daily check compares and notifies on.
+
+    Read versions, not Health.OUTDATED: broken and misconfigured rank higher.
+    Phase 35 reuses this contract.
+    """
+    return frozenset(
+        state.tool_id
+        for state in states
+        if state is not None
+        and state.present
+        and state.version is not None
+        and state.version.outdated is True
+    )
+
+
 def tool_state(
     tool: Tool,
     *,
@@ -1322,6 +1358,10 @@ class VersionRefreshService:
             self._pending_writes.append(write)
             return
         write()
+
+    @property
+    def cache_path(self) -> Path:
+        return self._cache_path
 
     @property
     def platform(self) -> Platform:
@@ -1788,14 +1828,20 @@ class VersionRefreshService:
             return True
         return self._which("uv") is not None and (inventory.uv_tools is None or outdated.uv is None)
 
-    def refresh(self, tools: Sequence[Tool]) -> None:
+    def refresh(
+        self,
+        tools: Sequence[Tool],
+        *,
+        stale_after: timedelta = STALE_AFTER,
+        on_failure: FailureSink | None = None,
+    ) -> None:
         """Resolve every tool once and publish the pass with one swap.
 
         BLOCKING — call only from a worker thread. Read the result through
         `state_of`. A call over the same tool-id set as a pass already in
         flight at the current epoch joins that pass (or raises its error):
         no second fetch, probe or publication. It never joins across an
-        `invalidate`.
+        `invalidate`. A joining refresh ignores its own `stale_after` and `on_failure`.
         """
         key = frozenset(tool.id for tool in tools)
         with self._lock:
@@ -1812,7 +1858,13 @@ class VersionRefreshService:
                 raise failure[0]
             return
         try:
-            self._pass(tools, seq=seq, started_epoch=started_epoch)
+            self._pass(
+                tools,
+                seq=seq,
+                started_epoch=started_epoch,
+                stale_after=stale_after,
+                on_failure=on_failure,
+            )
         except BaseException as exc:
             failure.append(exc)
             raise
@@ -1822,7 +1874,15 @@ class VersionRefreshService:
                     del self._inflight[key]
             done.set()
 
-    def _pass(self, tools: Sequence[Tool], *, seq: int, started_epoch: int) -> None:
+    def _pass(
+        self,
+        tools: Sequence[Tool],
+        *,
+        seq: int,
+        started_epoch: int,
+        stale_after: timedelta = STALE_AFTER,
+        on_failure: FailureSink | None = None,
+    ) -> None:
         # D-14: brew is re-read every pass. Every helper of this pass gets this
         # one value; none reads the shared `self._platform`, which an
         # overlapping pass may replace mid-pass (review M5). The evidence snapshot comes first:
@@ -1888,7 +1948,7 @@ class VersionRefreshService:
                     )
                     or (ownership.owner == "bun" and ownership.package is not None)
                 )
-                and should_fetch(entry, now=now)
+                and should_fetch(entry, now=now, stale_after=stale_after)
             )
             status, new_entry = resolve_status(
                 tool,
@@ -1902,6 +1962,8 @@ class VersionRefreshService:
                 platform=platform,
                 allow_fetch=allow_fetch,
                 unresolved=which(tool.cmd),
+                stale_after=stale_after,
+                on_failure=on_failure,
             )
             # D-09: the hint is computed here, once, from the ownership and version this pass
             # already holds; the projection reads it and never probes again.

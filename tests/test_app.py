@@ -459,7 +459,7 @@ def test_run_wizard_commits_held_writes_only_after_consent(tmp_path: Path, scena
             events.append("hold")
             super().hold_writes()
 
-        def refresh(self, tools: Sequence[Tool]) -> None:
+        def refresh(self, tools: Sequence[Tool], **_kwargs: object) -> None:
             events.append("refresh")
             if scenario == "failure":
                 raise OSError("state check failed")

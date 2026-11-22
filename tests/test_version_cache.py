@@ -1,9 +1,14 @@
+import contextlib
 import json
+import os
+import threading
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+import installer.version_cache as version_cache
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import load_tools
 from installer.ownership import ManagerInventory
@@ -17,10 +22,120 @@ from installer.version_cache import (
     encode_manager_snapshot,
     is_manager_stale,
     is_stale,
+    load_manager_snapshot,
     load_version_cache,
     save_version_cache,
     should_fetch,
 )
+
+
+def test_stamp_time_and_attempted_at_apply_one_validation() -> None:
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    earlier = now - timedelta(hours=2)
+    later = now - timedelta(hours=1)
+    assert version_cache.stamp_time(earlier.isoformat(), now=now) == earlier
+    for value in (
+        None,
+        "bad",
+        "2026-09-07T00:00:00",
+        (now + timedelta(minutes=6)).isoformat(),
+    ):
+        assert version_cache.stamp_time(value, now=now) is None
+    assert version_cache.attempted_at(None, now=now) is None
+    assert version_cache.attempted_at(_entry(checked_at=earlier.isoformat()), now=now) == earlier
+    assert (
+        version_cache.attempted_at(
+            _entry(checked_at=earlier.isoformat(), failed_at=later.isoformat()), now=now
+        )
+        == later
+    )
+    assert (
+        version_cache.attempted_at(_entry(checked_at="bad", failed_at=later.isoformat()), now=now)
+        == later
+    )
+    assert (
+        version_cache.attempted_at(_entry(checked_at=earlier.isoformat(), failed_at="bad"), now=now)
+        == earlier
+    )
+    assert version_cache.attempted_at(_entry(checked_at="bad"), now=now) is None
+
+
+def test_an_invalid_utf8_cache_file_reads_as_empty(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
+    path.write_bytes(b"\xff\xfe{")
+    assert load_version_cache(path) == {}
+    entry = _entry(checked_at=None)
+    save_version_cache(path, {"tool": entry})
+    assert load_version_cache(path) == {"tool": entry}
+
+
+def _bounded_cache_call(call: Callable[[], object], fifo: Path) -> object:
+    results: list[object] = []
+    thread = threading.Thread(target=lambda: results.append(call()), daemon=True)
+    thread.start()
+    try:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert len(results) == 1
+        return results[0]
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        thread.join(timeout=5)
+
+
+def test_a_non_regular_cache_file_never_blocks_the_loaders(tmp_path: Path) -> None:
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo)
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    oversized = tmp_path / "oversized"
+    oversized.write_bytes(b"x" * (4 * 1024 * 1024 + 1))
+    for path in (fifo, directory, oversized):
+        assert _bounded_cache_call(lambda path=path: load_version_cache(path), fifo) == {}
+        assert _bounded_cache_call(lambda path=path: load_manager_snapshot(path), fifo) is None
+    entry = _entry(checked_at=None)
+    assert _bounded_cache_call(lambda: save_version_cache(fifo, {"tool": entry}), fifo) is None
+    assert fifo.is_file()
+    assert load_version_cache(fifo) == {"tool": entry}
+    real = tmp_path / "real"
+    save_version_cache(real, {"tool": entry}, managers=encode_manager_snapshot(_snapshot()))
+    original = real.read_bytes()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    assert load_version_cache(link) == {"tool": entry}
+    assert load_manager_snapshot(link) == _snapshot()
+    save_version_cache(link, {"new": entry})
+    assert not link.is_symlink()
+    assert load_version_cache(link) == {"new": entry}
+    assert load_manager_snapshot(link) == _snapshot()
+    assert real.read_bytes() == original
+
+
+def test_the_cache_writer_replaces_a_final_symlink(tmp_path: Path) -> None:
+    real = tmp_path / "real.json"
+    entry = _entry(checked_at=None)
+    save_version_cache(real, {"old": entry})
+    original = real.read_bytes()
+    link = tmp_path / "versions.json"
+    link.symlink_to(real)
+    save_version_cache(link, {"new": entry})
+    assert not link.is_symlink()
+    assert load_version_cache(link) == {"new": entry}
+    assert real.read_bytes() == original
+
+
+def test_the_cache_writer_keeps_permission_bits_and_creates_owner_only_files(
+    tmp_path: Path,
+) -> None:
+    existing = tmp_path / "existing"
+    existing.write_text("{}")
+    existing.chmod(0o640)
+    save_version_cache(existing, {})
+    assert existing.stat().st_mode & 0o777 == 0o640
+    new = tmp_path / "new"
+    save_version_cache(new, {})
+    assert new.stat().st_mode & 0o777 == 0o600
 
 
 def test_round_trip_through_the_versioned_envelope(tmp_path: Path) -> None:
@@ -217,6 +332,28 @@ def test_default_cache_path_follows_userspace_state_convention(
 
 def _entry(*, checked_at: str | None, failed_at: str | None = None) -> VersionCacheEntry:
     return VersionCacheEntry(latest_version="v1.6.0", checked_at=checked_at, failed_at=failed_at)
+
+
+def test_is_stale_and_should_fetch_honor_an_explicit_window() -> None:
+    now = datetime(2026, 9, 7, tzinfo=UTC)
+    window = timedelta(hours=20)
+    for age, expected in ((window, True), (window - timedelta(seconds=1), False)):
+        entry = _entry(checked_at=(now - age).isoformat())
+        assert is_stale(entry, now=now, stale_after=window) is expected
+        assert should_fetch(entry, now=now, stale_after=window) is expected
+    for age, expected in (
+        (window, False),
+        (STALE_AFTER - timedelta(seconds=1), False),
+        (STALE_AFTER, True),
+        (STALE_AFTER + timedelta(seconds=1), True),
+    ):
+        assert is_stale(_entry(checked_at=(now - age).isoformat()), now=now) is expected
+    for age, expected in ((timedelta(hours=1), False), (timedelta(hours=7), True)):
+        entry = _entry(checked_at=(now - window).isoformat(), failed_at=(now - age).isoformat())
+        assert should_fetch(entry, now=now, stale_after=window) is expected
+    for entry in (None, _entry(checked_at=None)):
+        assert is_stale(entry, now=now, stale_after=window)
+        assert is_stale(entry, now=now)
 
 
 def test_exactly_seven_days_is_stale() -> None:

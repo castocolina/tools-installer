@@ -1,7 +1,7 @@
 """Timestamped JSON cache of last-known latest versions.
 
 The document lives at ~/.local/state/tools-installer/versions.json and is
-written through installer.atomic.atomic_write_text. Every persisted timestamp
+written through installer.atomic.atomic_replace_entry. Every persisted timestamp
 is read through `_parse_iso`: naive, non-ISO, and implausibly-future values
 degrade to "no usable timestamp" rather than crashing the refresh worker or
 suppressing checks forever.
@@ -29,17 +29,19 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Final, cast
 
-from installer.atomic import atomic_write_text
+from installer.atomic import atomic_replace_entry, read_capped
 from installer.locations import ensure_dir
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.ownership import ManagerInventory
 
+CACHE_CAP: Final = 4 * 1024 * 1024
 FUTURE_SKEW = timedelta(minutes=5)
 STALE_AFTER = timedelta(days=7)
 RETRY_BACKOFF = timedelta(hours=6)
@@ -90,6 +92,19 @@ def _parse_iso(value: object, *, now: datetime) -> datetime | None:
     if aware > now + FUTURE_SKEW:
         return None
     return aware
+
+
+def stamp_time(value: str | None, *, now: datetime) -> datetime | None:
+    """Return a validated cache timestamp, normalized to UTC."""
+    return _parse_iso(value, now=now)
+
+
+def attempted_at(entry: VersionCacheEntry | None, *, now: datetime) -> datetime | None:
+    """Return the most recent usable attempt timestamp."""
+    if entry is None:
+        return None
+    stamps = (stamp_time(entry.checked_at, now=now), stamp_time(entry.failed_at, now=now))
+    return max((stamp for stamp in stamps if stamp is not None), default=None)
 
 
 def _as_object(value: object) -> dict[str, object] | None:
@@ -153,12 +168,17 @@ def _tools_mapping(raw: object) -> dict[str, object] | None:
     return mapping
 
 
-def _envelope(path: Path) -> dict[str, object] | None:
+def _read_json(path: Path) -> object | None:
+    # Read through a final symlink for merging; the writer replaces it. Nonblocking avoids FIFOs.
     try:
-        raw: object = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+        data = read_capped(path, CACHE_CAP, follow_symlinks=True)
+        return json.loads(data.decode("utf-8")) if data is not None else None
+    except (OSError, ValueError):
         return None
-    mapping = _as_object(raw)
+
+
+def _envelope(path: Path) -> dict[str, object] | None:
+    mapping = _as_object(_read_json(path))
     if mapping is None or "tools" not in mapping:
         return None
     return mapping
@@ -173,11 +193,7 @@ def _existing_managers(path: Path) -> dict[str, object]:
 
 def load_version_cache(path: Path) -> dict[str, VersionCacheEntry]:
     """Read the cache. Missing, unreadable, or malformed input yields {} / skips."""
-    try:
-        raw: object = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-    tools_raw = _tools_mapping(raw)
+    tools_raw = _tools_mapping(_read_json(path))
     if tools_raw is None:
         return {}
     out: dict[str, VersionCacheEntry] = {}
@@ -210,20 +226,29 @@ def save_version_cache(
         "managers": managers_out,
     }
     ensure_dir(path.parent)
-    atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
+    try:
+        info = path.lstat()
+        mode = stat.S_IMODE(info.st_mode) if stat.S_ISREG(info.st_mode) else 0o600
+    except FileNotFoundError:
+        mode = 0o600
+    atomic_replace_entry(path, (json.dumps(payload, indent=2) + "\n").encode("utf-8"), mode=mode)
 
 
-def is_stale(entry: VersionCacheEntry | None, *, now: datetime) -> bool:
+def is_stale(
+    entry: VersionCacheEntry | None, *, now: datetime, stale_after: timedelta = STALE_AFTER
+) -> bool:
     if entry is None:
         return True
     checked_at = _parse_iso(entry.checked_at, now=now)
     if checked_at is None:
         return True
-    return now - checked_at >= STALE_AFTER
+    return now - checked_at >= stale_after
 
 
-def should_fetch(entry: VersionCacheEntry | None, *, now: datetime) -> bool:
-    if not is_stale(entry, now=now):
+def should_fetch(
+    entry: VersionCacheEntry | None, *, now: datetime, stale_after: timedelta = STALE_AFTER
+) -> bool:
+    if not is_stale(entry, now=now, stale_after=stale_after):
         return False
     if entry is None:
         return True
@@ -372,7 +397,8 @@ def decode_manager_snapshot(raw: object) -> ManagerSnapshot | None:
 
 
 def load_manager_snapshot(path: Path) -> ManagerSnapshot | None:
-    return decode_manager_snapshot(_existing_managers(path))
+    envelope = _envelope(path)
+    return decode_manager_snapshot(envelope.get("managers")) if envelope is not None else None
 
 
 def is_manager_stale(snapshot: ManagerSnapshot | None, *, now: datetime) -> bool:

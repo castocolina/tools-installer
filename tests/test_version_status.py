@@ -9,11 +9,13 @@ import subprocess
 import threading
 import time
 import tomllib
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
+from email.message import Message
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -105,6 +107,7 @@ from installer.version_status import (
     VersionRefreshService,
     VersionStatus,
     github_repo,
+    outdated_ids,
     ownership_notes,
     pnpm_findings,
     resolve_github_release_status,
@@ -131,6 +134,7 @@ from tests.state_doubles import (
     offline_service,
     pass_state,
     plan_state,
+    unavailable_state,
 )
 from tests.test_download import fixture_runner
 from tests.test_neovim import neovim_tool
@@ -420,6 +424,68 @@ def _gh_tool(tool_id: str) -> Tool:
         audience="both",
         tier="user",
     )
+
+
+def _outdated_test_state(tool_id: str, outdated: bool | None = True) -> ToolState:
+    tool = _gh_tool(tool_id)
+    version = VersionStatus(tool_id, "1.0", "2.0", outdated, False, "github")
+    return pass_state(tool, platform=_platform(), version=version)
+
+
+def test_outdated_ids_keeps_present_tools_with_an_outdated_version() -> None:
+    states = [
+        _outdated_test_state("b"),
+        _outdated_test_state("a"),
+        _outdated_test_state("c", False),
+        _outdated_test_state("d", None),
+        pass_state(_gh_tool("e"), platform=_platform(), version=None),
+    ]
+    result = outdated_ids(states)
+    assert isinstance(result, frozenset)
+    assert result == frozenset({"a", "b"})
+
+
+def test_outdated_ids_ignores_states_that_are_not_present() -> None:
+    tool = Tool(
+        id="macapp",
+        name="macapp",
+        category="dev",
+        cmd="macapp",
+        methods=(Method(kind="github_release", params={"repo": "o/macapp"}, os=("macos",)),),
+    )
+    version = VersionStatus(tool.id, "1.0", "2.0", True, False, "github")
+    missing = pass_state(tool, platform=_platform(), present=False, version=version)
+    absent = replace(absent_state(tool), version=version)
+    unavailable = replace(unavailable_state(tool), version=version)
+    checking = replace(
+        pass_state(tool, platform=_platform(), version=version), health=Health.CHECKING
+    )
+    assert [state.health for state in (missing, absent, unavailable, checking)] == [
+        Health.MISSING,
+        Health.MISSING,
+        Health.UNAVAILABLE,
+        Health.CHECKING,
+    ]
+    assert outdated_ids([missing, absent, unavailable, checking, None]) == frozenset()
+
+
+def test_outdated_ids_reads_the_version_not_the_health_word() -> None:
+    broken = replace(_outdated_test_state("broken"), health=Health.BROKEN)
+    misconfigured = replace(_outdated_test_state("misconfigured"), health=Health.MISCONFIGURED)
+    false_outdated = replace(_outdated_test_state("current", False), health=Health.OUTDATED)
+    assert outdated_ids([broken, misconfigured, false_outdated]) == frozenset(
+        {"broken", "misconfigured"}
+    )
+
+
+def test_outdated_ids_is_order_and_duplicate_insensitive() -> None:
+    a, b, c = _outdated_test_state("a"), _outdated_test_state("b"), _outdated_test_state("c", False)
+    assert outdated_ids([a, b, c]) == outdated_ids([c, b, a, a]) == frozenset({"a", "b"})
+
+
+def test_outdated_ids_of_nothing_is_empty() -> None:
+    assert outdated_ids([]) == frozenset()
+    assert outdated_ids([None, None]) == frozenset()
 
 
 def test_fresh_cache_after_restart_reconstructs_status_without_fetching(tmp_path: Path) -> None:
@@ -3190,6 +3256,7 @@ def _owner_pass_service(
     inventory_reads: list[dict[str, object]] | None = None,
     bun_versions: Callable[[], Mapping[str, str | None] | None] = listed_versions,
     resolve_npm: Callable[[str], str] = _forbidden_npm,
+    resolve_tag: Callable[[str], str] = lambda _repo: "1.0.0",
 ) -> VersionRefreshService:
     held = inventory if inventory is not None else _empty_inventory()
 
@@ -3202,7 +3269,7 @@ def _owner_pass_service(
     return VersionRefreshService(
         platform=platform if platform is not None else _no_brew_platform(),
         cache_path=tmp_path / "versions.json",
-        resolve_tag=lambda _repo: "1.0.0",
+        resolve_tag=resolve_tag,
         resolve_npm=resolve_npm,
         probe_output=probe_output,
         now=lambda: _STATE_NOW,
@@ -7522,7 +7589,13 @@ def _bun_row(index: int) -> Tool:
 
 
 def _bun_budget_service(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tools: Sequence[Tool], calls: list[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tools: Sequence[Tool],
+    calls: list[str],
+    *,
+    resolve_tag: Callable[[str], str] = lambda _repo: "1.0.0",
+    fail: bool = False,
 ) -> VersionRefreshService:
     home = _bun_scratch_home(tmp_path, monkeypatch)
     managed = home / "bin"
@@ -7534,10 +7607,13 @@ def _bun_budget_service(
 
     def resolve_npm(package: str) -> str:
         calls.append(package)
+        if fail:
+            raise VersionError("rate limited: HTTP 403")
         return "2.0.0"
 
     return _owner_pass_service(
         tmp_path / "svc",
+        resolve_tag=resolve_tag,
         which=which,
         managed=managed,
         bun_versions=lambda: listed,
@@ -7653,6 +7729,306 @@ def test_a_pending_iterm2_default_switch_reads_pending_install_tuning(
     assert _settled_states(service, [t])[t.id].unconfigured == (_TUNING_STEP,)
     fake.prefs[DEFAULT_GUID_KEY] = OTHER
     assert _settled_states(service, [t])[t.id].unconfigured == ()
+
+
+def _daily_seed(
+    path: Path, tools: Sequence[Tool], now: datetime, age: timedelta
+) -> dict[str, VersionCacheEntry]:
+    entries = {
+        tool.id: VersionCacheEntry("1.0.0", (now - age).isoformat(), digests={"asset": _DIGEST_A})
+        for tool in tools
+    }
+    save_version_cache(path, entries)
+    return entries
+
+
+def test_a_daily_check_refreshes_a_cache_the_interactive_window_keeps(tmp_path: Path) -> None:
+    now = _STATE_NOW
+    tools = [_gh_tool(f"daily-{i}") for i in range(3)]
+    path = tmp_path / "versions.json"
+    _daily_seed(path, tools, now, timedelta(days=1))
+    calls: list[str] = []
+
+    def resolve(repo: str) -> str:
+        calls.append(repo)
+        return "2.0.0"
+
+    service = _installer_owned_service(
+        path, resolve_tag=resolve, probe_output=lambda _: "1.0.0", now=lambda: now
+    )
+    service.refresh(tools)
+    assert not calls
+    service.refresh(tools, stale_after=timedelta(hours=20))
+    assert len(calls) == 3
+    assert all(entry.checked_at == now.isoformat() for entry in load_version_cache(path).values())
+
+
+@pytest.mark.parametrize(
+    "age,default_calls",
+    [
+        (timedelta(days=7) - timedelta(seconds=1), 0),
+        (timedelta(days=7), 1),
+        (timedelta(days=7, seconds=1), 1),
+    ],
+)
+def test_the_scheduled_window_refreshes_at_every_seven_day_boundary(
+    tmp_path: Path, age: timedelta, default_calls: int
+) -> None:
+    tool = _gh_tool("boundary")
+    calls: list[str] = []
+
+    def resolve(repo: str) -> str:
+        calls.append(repo)
+        return "2.0.0"
+
+    path = tmp_path / "versions.json"
+    service = _installer_owned_service(
+        path, resolve_tag=resolve, probe_output=lambda _: "1.0.0", now=lambda: _STATE_NOW
+    )
+    _daily_seed(path, [tool], _STATE_NOW, age)
+    service.refresh([tool])
+    assert len(calls) == default_calls
+    calls.clear()
+    _daily_seed(path, [tool], _STATE_NOW, age)
+    service.refresh([tool], stale_after=timedelta(hours=20))
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("count", [20, 21])
+def test_the_cap_holds_at_twenty_and_twenty_one_eligible_tools(tmp_path: Path, count: int) -> None:
+    tools = [_gh_tool(f"cap-{i:02d}") for i in range(count)]
+    path = tmp_path / "versions.json"
+    _daily_seed(path, tools, _STATE_NOW, timedelta(days=1))
+    calls: list[str] = []
+
+    def resolve(repo: str) -> str:
+        calls.append(repo)
+        return "2.0.0"
+
+    service = _installer_owned_service(
+        path, resolve_tag=resolve, probe_output=lambda _: "1.0.0", now=lambda: _STATE_NOW
+    )
+    service.refresh(tools, stale_after=timedelta(hours=20))
+    assert len(calls) == 20
+    if count == 21:
+        state = service.state_of(tools[-1].id)
+        assert state is not None and state.version is not None and state.version.stale is True
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_the_budget_and_the_sink_are_shared_by_github_npm_and_bun_fetches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    tools = (
+        [_gh_tool(f"gh-{i:02d}") for i in range(8)]
+        + [_npm_tool(f"inst-{i:02d}") for i in range(8)]
+        + [_bun_row(i) for i in range(8)]
+    )
+    calls: list[str] = []
+    failures: list[tuple[str, str]] = []
+
+    def resolve(repo: str) -> str:
+        calls.append(repo)
+        if fail:
+            raise VersionError("rate limited: HTTP 403")
+        return "2.0.0"
+
+    service = _bun_budget_service(
+        tmp_path, monkeypatch, tools, calls, resolve_tag=resolve, fail=fail
+    )
+    path = tmp_path / "svc" / "versions.json"
+    seeded = _daily_seed(path, tools, _STATE_NOW, timedelta(days=1))
+    service.refresh(tools)
+    assert not calls
+    service.refresh(
+        tools,
+        stale_after=timedelta(hours=20),
+        on_failure=lambda tool_id, reason: failures.append((tool_id, reason)),
+    )
+    assert len(calls) == 20
+    for tool in tools[-4:]:
+        state = service.state_of(tool.id)
+        assert state is not None and state.version is not None and state.version.stale is True
+    cached = load_version_cache(path)
+    if fail:
+        assert [item[0] for item in failures] == [tool.id for tool in tools[:20]]
+        assert all("rate limited" in reason for _, reason in failures)
+        for tool in tools[:20]:
+            assert cached[tool.id] == replace(seeded[tool.id], failed_at=_STATE_NOW.isoformat())
+    else:
+        assert not failures
+    for tool in tools[-4:]:
+        assert cached[tool.id] == seeded[tool.id]
+
+
+def test_the_budget_is_decided_by_owner_and_freshness_not_presence(tmp_path: Path) -> None:
+    tools = [_gh_tool(name) for name in ("miss", "fresh", "backoff", "managed", "eligible")]
+    path = tmp_path / "versions.json"
+    seeded = _daily_seed(path, tools, _STATE_NOW, timedelta(days=2))
+    seeded["fresh"] = replace(
+        seeded["fresh"], checked_at=(_STATE_NOW - timedelta(hours=1)).isoformat()
+    )
+    seeded["backoff"] = replace(
+        seeded["backoff"], failed_at=(_STATE_NOW - timedelta(hours=1)).isoformat()
+    )
+    save_version_cache(path, seeded)
+    calls: list[str] = []
+
+    def resolve(repo: str) -> str:
+        calls.append(repo)
+        return "2.0.0"
+
+    def native(command: list[str]) -> str:
+        if command[:4] == _RPM_BATCH:
+            return "".join(f"{path}\tmanaged\n" for path in command[4:])
+        return "managed\n"
+
+    def which(cmd: str) -> str | None:
+        if cmd == "managed":
+            return "/usr/bin/managed"
+        return str(_MANAGED / cmd) if cmd in {"fresh", "backoff", "eligible"} else None
+
+    service = VersionRefreshService(
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        cache_path=path,
+        resolve_tag=resolve,
+        resolve_npm=_forbidden_npm,
+        probe_output=lambda _: "1.0.0",
+        now=lambda: _STATE_NOW,
+        managed_bin_dir=_MANAGED,
+        which=which,
+        artifacts_for=lambda tool: (
+            [_MANAGED / tool.cmd] if tool.id in {"fresh", "backoff", "eligible"} else []
+        ),
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=_empty_outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+        native_probe=native,
+    )
+    service.refresh(tools)
+    assert not calls
+    service.refresh(tools, stale_after=timedelta(hours=20))
+    assert calls == ["owner/eligible"]
+    fresh = service.state_of("fresh")
+    backoff = service.state_of("backoff")
+    assert fresh is not None and fresh.version is not None and fresh.version.stale is False
+    assert backoff is not None and backoff.version is not None and backoff.version.stale is True
+
+
+def test_a_manager_query_failure_does_not_reach_the_sink(tmp_path: Path) -> None:
+    failures: list[tuple[str, str]] = []
+
+    def fail(**_kwargs: object) -> OutdatedReport:
+        raise OSError("manager failed")
+
+    service = VersionRefreshService(
+        platform=_platform(),
+        cache_path=tmp_path / "versions.json",
+        which=lambda _: None,
+        resolve_tag=lambda _: "1.0.0",
+        resolve_npm=_forbidden_npm,
+        probe_output=lambda _: None,
+        read_inventory_fn=_empty_inventory,
+        read_outdated_fn=fail,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        query=lambda *_args, **_kwargs: "",
+    )
+    service.refresh(
+        [],
+        stale_after=timedelta(hours=20),
+        on_failure=lambda tool_id, reason: failures.append((tool_id, reason)),
+    )
+    assert not failures
+
+
+def test_a_failing_lookup_goes_to_the_sink_and_not_to_the_caller(tmp_path: Path) -> None:
+    tools = [_gh_tool("failure-a"), _gh_tool("failure-b")]
+    path = tmp_path / "versions.json"
+    seeded = _daily_seed(path, tools, _STATE_NOW, timedelta(days=1))
+    calls: list[str] = []
+    failures: list[tuple[str, str]] = []
+
+    def resolve(repo: str) -> str:
+        calls.append(repo)
+        raise VersionError("rate limited: HTTP 403")
+
+    service = _installer_owned_service(
+        path, resolve_tag=resolve, probe_output=lambda _: "1.0.0", now=lambda: _STATE_NOW
+    )
+    service.refresh(
+        tools,
+        stale_after=timedelta(hours=20),
+        on_failure=lambda tool_id, reason: failures.append((tool_id, reason)),
+    )
+    assert len(calls) == len(failures) == 2
+    assert all("rate limited" in reason for _, reason in failures)
+    assert load_version_cache(path) == {
+        key: replace(value, failed_at=_STATE_NOW.isoformat()) for key, value in seeded.items()
+    }
+    service.refresh(
+        tools,
+        stale_after=timedelta(hours=20),
+        on_failure=lambda tool_id, reason: failures.append((tool_id, reason)),
+    )
+    service.refresh(tools)
+    assert len(calls) == len(failures) == 2
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_the_window_refresh_keeps_the_asset_digests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    tool = _codegraph()
+    path = tmp_path / "versions.json"
+    seeded = _daily_seed(path, [tool], _STATE_NOW, timedelta(days=2))
+    failures: list[tuple[str, str]] = []
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {"tag_name": "2.0.0", "assets": [{"name": "new", "digest": "sha256:" + "b" * 64}]}
+            ).encode()
+
+    def urlopen(_request: object, timeout: int) -> Response:
+        if fail:
+            raise urllib.error.HTTPError(
+                "https://example.test", 403, "rate limited", Message(), None
+            )
+        return Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    service = _installer_owned_service(
+        path, resolve_tag=resolve_github_tag, probe_output=lambda _: "1.0.0", now=lambda: _STATE_NOW
+    )
+    service.refresh(
+        [tool],
+        stale_after=timedelta(hours=20),
+        on_failure=lambda tool_id, reason: failures.append((tool_id, reason)),
+    )
+    cached = load_version_cache(path)[tool.id]
+    if fail:
+        assert cached == replace(seeded[tool.id], failed_at=_STATE_NOW.isoformat())
+        assert len(failures) == 1 and failures[0][0] == tool.id
+    else:
+        assert cached.digests == {"new": "b" * 64}
+        assert not failures
+
+
+def test_the_service_exposes_its_cache_path(tmp_path: Path) -> None:
+    path = tmp_path / "versions.json"
+    service = _installer_owned_service(
+        path, resolve_tag=lambda _: "1.0.0", probe_output=lambda _: None, now=lambda: _STATE_NOW
+    )
+    assert service.cache_path == path
 
 
 def test_ghostty_partial_is_a_reason_not_a_step(tmp_path: Path) -> None:
