@@ -112,6 +112,43 @@ while True: time.sleep(1)
                 return deps
 
             patch(setup, "_schedule_run_deps", hang_deps)
+        if scenario == "long-id":
+            from installer import update_all_state
+            from tests.update_check_doubles import FakeNotifier
+
+            now = datetime.now(UTC)
+            uv, leaf = catalog_tool("uv"), catalog_tool("a" * 400)
+            states = {"uv": state(uv, "installer"), leaf.id: state(leaf, "uv", outdated=True)}
+            spy = SpyService({leaf.id: UpdateOutcome(leaf.id, "failed", "uv", "boom")})
+            runs = spy.runs
+            ctx = schedules.context_for(
+                "fedora", checkout=Path(config["checkout"]), read_models=lambda _a: None
+            )
+            store = schedules.updated_today_path(ctx)
+            store.parent.mkdir(parents=True, exist_ok=True)
+            store.write_text("invalid")
+            refresh = SequenceRefresher(
+                home / "versions", [states], clock=lambda: now, raises_on=frozenset({1})
+            )
+            deps = run_deps(
+                [uv, leaf],
+                ctx,
+                service=spy,
+                owners={key: item.ownership for key, item in states.items()},
+                refresh=refresh,
+                now=lambda: now,
+                notify=FakeNotifier("alpha beta " * 80),
+            )
+
+            def fail(*_a: object, **_k: object) -> None:
+                raise OSError("unavailable")
+
+            def long_deps(*_a: object, **_k: object) -> RunDeps:
+                return deps
+
+            patch(update_all_state, "start_run_log", fail)
+            patch(update_all_state, "record_updated", fail)
+            patch(setup, "_schedule_run_deps", long_deps)
         if scenario in ("three", "failing"):
             now = datetime.now(UTC)
             brew, uv, ruff = (catalog_tool(name) for name in ("brew", "uv", "ruff"))

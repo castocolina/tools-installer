@@ -25,6 +25,338 @@ from installer.terminal_shell import TerminalShellResult
 from tests.compose_patch import patch_composition
 
 
+def test_plan_equals_run_through_the_setup_main_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from datetime import UTC, datetime
+
+    from installer import schedules, update_all_state
+    from tests.test_update_all_plan import snapshot_home
+    from tests.update_all_doubles import (
+        SequenceRefresher,
+        SpyService,
+        catalog_tool,
+        held_by_parent,
+        run_deps,
+        state,
+    )
+    from tests.update_check_doubles import check_context
+
+    ctx = check_context(tmp_path, monkeypatch)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    now = datetime(2026, 11, 22, tzinfo=UTC)
+    tools = [catalog_tool(name) for name in ("brew", "uv", "jq", "ruff", "yq", "zed")]
+    owners = ("installer", "installer", "brew", "uv", "brew", "pacman")
+    states = {
+        tool.id: state(tool, owner, outdated=i >= 2)
+        for i, (tool, owner) in enumerate(zip(tools, owners, strict=True))
+    }
+    service = SpyService()
+    deps = run_deps(
+        tools,
+        ctx,
+        service=service,
+        owners={k: v.ownership for k, v in states.items()},
+        refresh=SequenceRefresher(tmp_path / "versions", [states], clock=lambda: now),
+        now=lambda: now,
+    )
+    update_all_state.record_updated(
+        schedules.updated_today_path(ctx), "yq", today=now.date(), by="update-claude"
+    )
+
+    def fake_deps(*_a: object, **_k: object) -> object:
+        return deps
+
+    def load(_path: Path) -> list[Tool]:
+        return tools
+
+    monkeypatch.setattr(setup, "_schedule_run_deps", fake_deps)
+    monkeypatch.setattr(setup, "detect", lambda: _PLATFORM)
+    monkeypatch.setattr(setup, "load_tools", load)
+    before = snapshot_home(tmp_path)
+    assert setup.main(["--run-schedule", "update-all", "--plan"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert service.runs == [] and snapshot_home(tmp_path) == before
+    assert not schedules.update_all_log_path(ctx).exists()
+    preview = [
+        (s.split(":", 1)[0], "skip", s.split("skipped: ", 1)[1])
+        if ": skipped: " in s
+        else (s.split(" ", 1)[0], "update", "")
+        for s in lines[:-2]
+    ]
+    with held_by_parent(ctx) as pid:
+        argv = [
+            "--run-schedule",
+            "update-all",
+            "--parent-holds-run-lock",
+            "--lock-holder-pid",
+            str(pid),
+        ]
+        assert setup.main(argv) == 0
+        assert len(capsys.readouterr().out.splitlines()) == 1
+        log = schedules.update_all_log_path(ctx).read_text().splitlines()
+        actual = [
+            (p[1], "skip", p[2][9:]) if p[2].startswith("skipped: ") else (p[1], "update", "")
+            for line in log
+            if (p := line.split(" ", 2))
+        ]
+        assert preview == actual and len(log) == len(preview)
+        updated = service.runs.copy()
+        assert setup.main(argv) == 0
+        assert "0 updated" in capsys.readouterr().out
+        log = schedules.update_all_log_path(ctx).read_text()
+        assert all(f"{name} skipped: updated today" in log for name in updated)
+        assert service.runs == updated
+
+
+def test_the_new_modules_are_wired_and_spawn_nothing() -> None:
+    import ast
+
+    root = Path(__file__).resolve().parent.parent / "installer"
+    tree = ast.parse((root / "schedule_run.py").read_text())
+    names = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "installer"
+        for alias in node.names
+    }
+    assert {"update_all", "update_all_state"} <= names
+    for name in ("update_all.py", "update_all_state.py"):
+        tree = ast.parse((root / name).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                assert all(alias.name != "subprocess" for alias in node.names)
+            if isinstance(node, ast.ImportFrom):
+                assert node.module != "subprocess"
+
+
+def test_every_closed_list_knows_the_update_all_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import argparse
+    from typing import Any
+
+    from installer import cli, schedules, schedules_screen
+    from tests.test_schedules_engine import make_env
+    from tests.test_schedules_lifecycle import unit_files
+
+    actions: list[argparse.Action] = []
+    original = argparse.ArgumentParser.add_argument
+
+    def capture(parser: argparse.ArgumentParser, *args: str, **kwargs: Any) -> argparse.Action:
+        action = original(parser, *args, **kwargs)
+        if "--run-schedule" in args:
+            actions.append(action)
+        return action
+
+    monkeypatch.setattr(argparse.ArgumentParser, "add_argument", capture)
+    cli.parse_args([])
+    assert tuple(actions[0].choices or ()) == schedules.RUN_SCHEDULE_IDS
+    assert [row.id for row in schedules.SCHEDULES if not row.default_on] == ["update-all"]
+    for platform in ("fedora", "macos"):
+        env = make_env(tmp_path / platform, monkeypatch, os_key=platform)
+        ctx = env.ctx
+        for row in schedules.SCHEDULES:
+            args = schedules.runner_argv(ctx, row, env.uv)[6:]
+            assert vars(schedule_runner)["_parse"](args)[1] == row.id
+        row = schedules.schedule_by_id("update-all")
+        cache = schedules.schedule_by_id("cache-cleanup")
+        screen = schedules_screen.SchedulesScreen(schedules_screen.ScheduleInputs(ctx))
+        monkeypatch.setattr(screen, "_manager", True)
+        target = vars(type(screen))["_target"]
+        detail = vars(type(screen))["_detail"]
+        assert target(screen, row) == "all tools"
+        assert target(screen, row) != target(screen, cache)
+        assert vars(schedules_screen)["_UPDATE_ALL_WHAT"] in detail(screen, row)
+        assert vars(schedules_screen)["_CACHE_WHAT"] in detail(screen, cache)
+        assert all(
+            p in vars(schedules)["_state_artifacts"](ctx)
+            for p in (schedules.updated_today_path(ctx), schedules.update_all_log_path(ctx))
+        )
+        schedules.turn_on(ctx, "update-all")
+        files = (
+            unit_files(ctx, schedules.basename_for("update-all"))
+            if platform == "fedora"
+            else list(ctx.home.rglob("*update-all*.plist"))
+        )
+        assert files and all(path.is_file() for path in files)
+        assert any("update-all" in path.read_text() for path in files)
+        schedules.turn_off(ctx, "update-all")
+        assert all(not path.exists() for path in files)
+
+
+def test_the_real_composition_wires_the_runner_and_holds_preview_writes_and_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from datetime import UTC, datetime
+
+    from installer import runlock, schedules
+    from tests.update_all_doubles import (
+        SequenceRefresher,
+        SpyService,
+        catalog_tool,
+        held_by_parent,
+        state,
+    )
+    from tests.update_check_doubles import FakeNotifier, check_context
+
+    ctx = check_context(tmp_path, monkeypatch)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(setup, "detect", lambda: _PLATFORM)
+
+    def probe(*_a: object) -> None:
+        return None
+
+    def notifier(*_a: object) -> FakeNotifier:
+        return FakeNotifier()
+
+    monkeypatch.setattr(setup, "probe_version_output", probe)
+    monkeypatch.setattr(setup, "notifier_for", notifier)
+    tool = catalog_tool("brew")
+    item = state(tool, "installer")
+    now = datetime.now(UTC)
+
+    class Refresh(SequenceRefresher):
+        holds = 0
+        commits = 0
+
+        def hold_writes(self) -> None:
+            self.holds += 1
+
+        def commit_writes(self) -> None:
+            self.commits += 1
+
+        def resolve_owner(self, _tool: Tool) -> object:
+            return item.ownership
+
+    refresh = Refresh(tmp_path / "versions", [{tool.id: item}], clock=lambda: now)
+    service = SpyService()
+    runners: list[object] = []
+
+    def build(*_a: object, **kwargs: object) -> tuple[object, object, None, None]:
+        runners.append(kwargs["runner"])
+        return refresh, service, None, None
+
+    patch_composition(monkeypatch, "_build_services", build)
+
+    def load(_path: Path) -> list[Tool]:
+        return [tool]
+
+    monkeypatch.setattr(setup, "load_tools", load)
+    args = ["--run-schedule", "update-all"]
+    assert setup.main(args + ["--plan"]) == 0
+    capsys.readouterr()
+    assert (refresh.holds, refresh.commits, runners) == (1, 0, [run_captured_in_group])
+    other = runlock.try_acquire(ctx.lock_path, "update-claude")
+    assert other is not None
+    try:
+        assert setup.main(args) == 0
+        assert capsys.readouterr().out == "skipped: busy\n"
+        assert (
+            setup.main(args + ["--parent-holds-run-lock", "--lock-holder-pid", str(os.getpid())])
+            == 1
+        )
+        assert (
+            capsys.readouterr().out == "failed: update-all refuses an unverified parent run lock\n"
+        )
+    finally:
+        other.release()
+    for extra in (
+        ["--parent-holds-run-lock"],
+        ["--parent-holds-run-lock", "--lock-holder-pid", str(os.getpid())],
+    ):
+        assert setup.main(args + extra) == 1
+        assert (
+            capsys.readouterr().out == "failed: update-all refuses an unverified parent run lock\n"
+        )
+    ctx.lock_path.write_text(f"update-all {os.getpid()} live\n")
+    assert (
+        setup.main(args + ["--parent-holds-run-lock", "--lock-holder-pid", str(os.getpid())]) == 1
+    )
+    assert capsys.readouterr().out == "failed: update-all refuses an unverified parent run lock\n"
+    assert (
+        not schedules.updated_today_path(ctx).exists()
+        and not schedules.update_all_log_path(ctx).exists()
+    )
+    assert service.runs == [] and refresh.holds == 1 and refresh.commits == 0
+    assert all(runner is update_all_runner for runner in runners[1:])
+    original = runlock.try_acquire
+    acquisitions: list[str] = []
+    with held_by_parent(ctx) as pid:
+
+        def acquire(path: Path, job: str) -> object:
+            acquisitions.append(job)
+            return original(path, job)
+
+        monkeypatch.setattr(runlock, "try_acquire", acquire)
+        assert setup.main(args + ["--parent-holds-run-lock", "--lock-holder-pid", str(pid)]) == 0
+        assert capsys.readouterr().out.startswith("ok: 1 updated")
+        assert acquisitions == [] and service.runs == ["brew"]
+
+
+def test_the_worst_case_summary_fits_the_budget() -> None:
+    fixed = (
+        "updated-today record unreadable",
+        "run log not saved",
+        "updated-today record not saved",
+        "second refresh failed; dependents judged on the first pass",
+    )
+    line = update_all.summary_line(
+        updated=3,
+        skipped=12,
+        unchanged=4,
+        failed=5,
+        first_failed="mmdc",
+        clauses=(*fixed, "notify skipped: " + "x" * 500),
+    )
+    assert len(line) <= 300
+    assert line.startswith("failed: 5 failed (mmdc), 3 updated, 12 skipped; 4 unchanged")
+    assert all(part in line for part in fixed) and "notify skipped: " in line
+    assert line.endswith("x") and all(ord(c) >= 32 for c in line)
+    line = update_all.summary_line(updated=1, skipped=0, clauses=("notify skipped: a\t\x1b[31mb",))
+    assert "\t" not in line and "\x1b" not in line
+    for n in range(270, 301):
+        line = update_all.summary_line(
+            updated=1, skipped=0, clauses=("x" * n, "notify skipped: " + "alpha beta " * 80)
+        )
+        assert len(line) <= 300 and not line.endswith(" ")
+
+
+def test_long_id_manual_and_timer_lines_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    from tests import update_all_child
+    from tests.test_update_all_job import make_job, run_job
+
+    _home, checkout, uv, lock = make_job(tmp_path, monkeypatch, "long-id")
+    config = tmp_path / "config.json"
+    with monkeypatch.context() as isolated:
+        isolated.setattr(update_all_child, "patch", isolated.setattr)
+        assert update_all_child.main(str(config), ["--run-schedule", "update-all"]) == 1
+    manual = capsys.readouterr().out.strip()
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["runs"] == ["uv", "a" * 400]
+    code, lines = run_job(tmp_path, checkout, uv, lock)
+    assert code == 1, (
+        lines,
+        (tmp_path / "traceback").read_text() if (tmp_path / "traceback").exists() else "",
+    )
+    timer = lines[-1].split(" ", 2)[2]
+    assert timer == manual and len(timer) <= 300
+    assert timer.startswith("failed: 1 failed (" + "a" * 40 + "),")
+    for clause in (
+        "updated-today record unreadable",
+        "run log not saved",
+        "updated-today record not saved",
+        "second refresh failed; dependents judged on the first pass",
+    ):
+        assert clause in timer
+
+
 def _fake_schedule(*_a: object, **_k: object) -> tuple[str, int]:
     return "ok: done", 0
 
