@@ -8,11 +8,14 @@ from pathlib import Path
 
 import pytest
 
+from installer import schedules, update_all_state
 from installer.helper_assets import schedule_runner
 from tests.test_update_check_job import snapshot
 
 
-def make_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path, Path]:
+def make_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str = "empty"
+) -> tuple[Path, Path, Path, Path]:
     home = tmp_path / "home"
     home.mkdir()
     checkout = tmp_path / "co"
@@ -28,6 +31,7 @@ def make_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
     config.write_text(
         json.dumps(
             {
+                "scenario": scenario,
                 "home": str(home),
                 "checkout": str(checkout),
                 "result": str(tmp_path / "result.json"),
@@ -81,6 +85,44 @@ def test_the_update_all_job_runs_end_to_end(
     result = json.loads((tmp_path / "result.json").read_text())
     assert result == {"code": 0, "runs": [], "bytecode": "1", "no_sudo": "1", "lock": str(lock)}
     assert snapshot(checkout) == before
+
+
+def test_three_tools_leave_three_run_log_lines_and_one_shared_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home, checkout, uv, lock = make_job(tmp_path, monkeypatch, "three")
+    before = snapshot(checkout)
+    code, lines = run_job(tmp_path, checkout, uv, lock)
+    assert code == 0, (
+        lines,
+        (tmp_path / "traceback").read_text() if (tmp_path / "traceback").exists() else "",
+    )
+    assert len(lines) == 2 and re.fullmatch(r"\S+ update-all start", lines[0])
+    assert re.fullmatch(r"\S+ update-all ok: 3 updated, 0 skipped", lines[1])
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["runs"] == ["brew", "uv", "ruff"] and result["no_sudo"] == "1"
+    ctx = schedules.context_for("fedora", checkout=checkout, read_models=lambda _a: None)
+    log = schedules.update_all_log_path(ctx).read_text().splitlines()
+    assert [line.split(" ", 2)[1] for line in log] == ["brew", "uv", "ruff"]
+    records, healthy = update_all_state.read_updated(schedules.updated_today_path(ctx))
+    assert healthy and set(records) == {"brew", "uv", "ruff"}
+    assert all(item.by == "update-all" for item in records.values())
+    assert snapshot(checkout) == before and ctx.home == home
+
+
+def test_a_failing_manager_through_the_runner_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _home, checkout, uv, lock = make_job(tmp_path, monkeypatch, "failing")
+    code, lines = run_job(tmp_path, checkout, uv, lock)
+    assert code == 1 and len(lines) == 2
+    assert re.fullmatch(
+        r"\S+ update-all failed: 1 failed \(brew\), 1 updated, 1 skipped", lines[-1]
+    )
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["runs"] == ["brew", "uv"]
+    ctx = schedules.context_for("fedora", checkout=checkout, read_models=lambda _a: None)
+    assert "ruff skipped: brew failed" in schedules.update_all_log_path(ctx).read_text()
 
 
 @pytest.mark.parametrize("text_only", [False, True])

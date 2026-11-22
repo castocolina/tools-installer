@@ -7,9 +7,9 @@ line with a matching exit code. This module decides; `setup.py` only wires the r
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from installer import cursor_shim, runlock, schedules, update_all, update_all_state, update_check
@@ -18,7 +18,22 @@ from installer.notify import Notifier, no_notifier
 from installer.ownership import ManagerOwnership
 from installer.run import CommandError
 from installer.sanitize import sanitize_log_line
-from installer.update import UpdateError, UpdateService, UpdateTarget
+from installer.update import (
+    GuardFn,
+    UpdateError,
+    UpdateOutcome,
+    UpdateService,
+    UpdateTarget,
+    update_refusal,
+)
+from installer.version_cache import (
+    MANAGER_STALE_AFTER,
+    ManagerSnapshot,
+    VersionCacheEntry,
+    load_version_cache,
+    stamp_time,
+)
+from installer.version_status import ToolState, outdated_ids
 
 _REASON_LIMIT = 300
 
@@ -61,11 +76,61 @@ class ToolRun:
     mutated: bool
 
 
-def _update_tool(tool: Tool, deps: RunDeps) -> ToolRun:
+class _BatchGuard:
+    def __init__(
+        self,
+        tool: Tool,
+        platform_os: str,
+        failed_managers: Mapping[str, str],
+        completed_managers: set[str],
+        catalog: Sequence[Tool],
+        evidence_owner: str,
+    ) -> None:
+        self.tool = tool
+        self.platform_os = platform_os
+        self.failed_managers = failed_managers
+        self.completed_managers = completed_managers
+        self.catalog = catalog
+        self.evidence_owner = evidence_owner
+        self.root: str | None = None
+        self.refused = False
+
+    def __call__(self, fresh: ManagerOwnership) -> UpdateOutcome | None:
+        refusal = update_refusal(self.tool, fresh)
+        reason = update_all.exclusion(self.platform_os, fresh, refusal)
+        if reason is not None:
+            self.refused = True
+            if refusal is not None and reason != update_all.SKIP_CASK:
+                return refusal
+            return UpdateOutcome(self.tool.id, "unsupported", fresh.owner, reason)
+        manager = update_all.owner_manager(fresh.owner)
+        self.root = update_all.blocking_manager(
+            self.tool, manager, self.failed_managers, self.catalog
+        )
+        if self.root is not None:
+            reason = f"{self.root} failed"
+        elif (
+            manager is not None
+            and manager != self.tool.id
+            and manager not in self.completed_managers
+        ):
+            reason = f"{manager} did not run first"
+        elif fresh.owner != self.evidence_owner:
+            reason = "owner changed since the evidence"
+        else:
+            return None
+        self.refused = True
+        return UpdateOutcome(self.tool.id, "unsupported", fresh.owner, reason)
+
+
+def _update_tool(tool: Tool, deps: RunDeps, *, guard: GuardFn | None = None) -> ToolRun:
     try:
         ownership = deps.resolve_owner(tool)
         before = deps.probe_version(tool, ownership)
-        outcome = deps.updates.run(UpdateTarget(tool=tool, ownership=ownership))
+        target = UpdateTarget(tool=tool, ownership=ownership)
+        outcome = (
+            deps.updates.run(target) if guard is None else deps.updates.run_guarded(target, guard)
+        )
     except (UpdateError, CommandError, OSError) as error:
         return ToolRun(f"failed: {_reason(error)}", 1, False)
     try:
@@ -82,11 +147,13 @@ def _update_tool(tool: Tool, deps: RunDeps) -> ToolRun:
     return ToolRun(line, code, outcome.mutated)
 
 
-def _update(schedule: schedules.Schedule, deps: RunDeps) -> ToolRun:
+def _update(
+    schedule: schedules.Schedule, deps: RunDeps, *, guard: GuardFn | None = None
+) -> ToolRun:
     tool = next((tool for tool in deps.tools if tool.id == schedule.target), None)
     if tool is None:
         return ToolRun(f"failed: {schedule.target} is not in the catalog", 1, False)
-    return _update_tool(tool, deps)
+    return _update_tool(tool, deps, guard=guard)
 
 
 def _agent_resolves(agent: Path) -> bool:
@@ -132,12 +199,18 @@ def _refresh_cursor_shim(context: schedules.ScheduleContext) -> str:
 
 
 def _update_cursor_agent(
-    schedule: schedules.Schedule, deps: RunDeps, context: schedules.ScheduleContext
+    schedule: schedules.Schedule,
+    deps: RunDeps,
+    context: schedules.ScheduleContext,
+    *,
+    guard: GuardFn | None = None,
 ) -> ToolRun:
     _link, agent = cursor_shim.shim_paths(context.home)
     if not _agent_resolves(agent):  # SPEC edge R7 empty: nothing is updated or rewritten
         return ToolRun("failed: ~/.local/bin/agent is missing or dangling", 1, False)
-    run = _update(schedule, deps)
+    run = _update(schedule, deps, guard=guard)
+    if guard is not None and run.line.startswith("skipped:"):
+        return run
     try:
         return ToolRun(run.line + _refresh_cursor_shim(context), run.code, run.mutated)
     except OSError as error:
@@ -152,10 +225,239 @@ def _check(deps: RunDeps) -> tuple[str, int]:
     )
 
 
+# Mirrors update_check._MANAGER_SOURCES.
+MANAGER_SOURCES = frozenset({"brew", "cask", "pnpm", "uv"})
+MANAGER_OF_SOURCE = {"brew": "brew", "cask": "brew", "pnpm": "pnpm", "uv": "uv"}
+
+
+@dataclass(frozen=True)
+class RefreshPass:
+    states: dict[str, ToolState]
+    entries: dict[str, VersionCacheEntry]
+    snapshot: ManagerSnapshot | None
+    started: datetime
+
+
+def _refresh_pass(
+    deps: RunDeps, *, stale_after: timedelta = update_check.CHECK_STALE_AFTER
+) -> RefreshPass:
+    refresh = deps.refresh
+    if refresh is None:
+        raise ValueError("refresh is not wired")
+    started = deps.now()
+    cache = load_version_cache(refresh.cache_path)
+    ordered = update_check.oldest_checked_first(deps.tools, cache, now=started)
+    result = refresh.refresh(ordered, stale_after=stale_after, on_failure=None)
+    states, entries, snapshot = result if result is not None else ({}, {}, None)
+    return RefreshPass(states, entries, snapshot, started)
+
+
+def _confirmed(
+    deps: RunDeps,
+    refresh_pass: RefreshPass,
+    *,
+    stale_after: timedelta = update_check.CHECK_STALE_AFTER,
+) -> frozenset[str]:
+    refresh = deps.refresh
+    if refresh is None:
+        raise ValueError("refresh is not wired")
+    now = deps.now()
+
+    def fresh(window: timedelta) -> frozenset[str]:
+        return update_check.fresh_ids(
+            deps.tools,
+            refresh_pass.states.get,
+            refresh.cache_path,
+            started=now - window,
+            now=now,
+            pass_cache=refresh_pass.entries,
+            pass_snapshot=refresh_pass.snapshot,
+        )
+
+    managers, others = fresh(MANAGER_STALE_AFTER), fresh(stale_after)
+    result: set[str] = set()
+    for tool_id, state in refresh_pass.states.items():
+        if state.version is None:
+            continue
+        source = state.version.source
+        if source not in MANAGER_SOURCES:
+            if tool_id in others:
+                result.add(tool_id)
+            continue
+        snapshot = refresh_pass.snapshot
+        if tool_id not in managers or snapshot is None:
+            continue
+        failed = stamp_time(snapshot.failed_at, now=now)
+        stamp = stamp_time(snapshot.manager_checked_at.get(source), now=now)
+        if stamp is not None and (failed is None or failed <= stamp):
+            result.add(tool_id)
+    return frozenset(result)
+
+
+def _refusal_evidence(
+    tools: Sequence[Tool], states: Mapping[str, ToolState]
+) -> dict[str, UpdateOutcome | None]:
+    return {
+        tool.id: update_refusal(tool, states[tool.id].ownership)
+        for tool in tools
+        if tool.id in states and states[tool.id].present
+    }
+
+
 def _update_all(deps: RunDeps) -> tuple[str, int]:
     if deps.refresh is None or deps.context is None:
         return "failed: update-all is not wired", 2
-    return update_all.summary_line(updated=0, skipped=0), 0
+    ctx = deps.context
+    try:
+        first = _refresh_pass(deps)
+    except (CommandError, OSError):
+        return "failed: refresh failed", 1
+    store = schedules.updated_today_path(ctx)
+    entries, healthy = update_all_state.read_updated(store)
+    clauses: list[str] = [] if healthy else ["updated-today record unreadable"]
+    log = schedules.update_all_log_path(ctx)
+    log_ok = True
+    try:
+        update_all_state.start_run_log(log)
+    except OSError:
+        log_ok = False
+        clauses.append("run log not saved")
+    updated = unchanged = skipped = 0
+    failed: list[str] = []
+    failed_managers: dict[str, str] = {}
+    completed: set[str] = set()
+    mutated_managers: set[str] = set()
+    by_id = {tool.id: tool for tool in deps.tools}
+
+    def today_map(day: date) -> dict[str, str]:
+        return update_all_state.updated_on(entries, day)
+
+    def run_entries(
+        plan: Callable[[date], tuple[update_all.PlanEntry, ...]], states: Mapping[str, ToolState]
+    ) -> None:
+        nonlocal updated, unchanged, skipped, log_ok
+        day = deps.now().date()
+        queue = list(plan(day))
+        processed: set[str] = set()
+        while queue:
+            current_day = deps.now().date()
+            if day != current_day:
+                day = current_day
+                queue = [entry for entry in plan(day) if entry.tool_id not in processed]
+                if not queue:
+                    break
+            entry = queue.pop(0)
+            tool = by_id[entry.tool_id]
+            processed.add(tool.id)
+            manager = tool.id in update_all.MANAGER_IDS
+            guard = _BatchGuard(
+                tool,
+                ctx.platform_os,
+                failed_managers,
+                completed,
+                deps.tools,
+                states[tool.id].ownership.owner,
+            )
+            if entry.action == "skip":
+                run = ToolRun(f"skipped: {entry.reason}", 0, False)
+                if manager:
+                    owner = update_all.owner_manager(states[tool.id].ownership.owner)
+                    root = update_all.blocking_manager(tool, owner, failed_managers, deps.tools)
+                    if root is not None:
+                        failed_managers[tool.id] = root
+                    elif entry.reason not in (
+                        update_all.SKIP_MANAGER_CYCLE,
+                        update_all.SKIP_CYCLE_BLOCKED,
+                    ) and (owner is None or owner == tool.id or owner in completed):
+                        completed.add(tool.id)
+            else:
+                run = (
+                    _update_cursor_agent(
+                        schedules.schedule_by_id("update-cursor-agent"), deps, ctx, guard=guard
+                    )
+                    if tool.id == "cursor-agent"
+                    else _update_tool(tool, deps, guard=guard)
+                )
+                if manager:
+                    if run.line.startswith("failed:"):
+                        failed_managers[tool.id] = tool.id
+                    elif guard.root is not None:
+                        failed_managers[tool.id] = guard.root
+                    elif not guard.refused:
+                        completed.add(tool.id)
+                    if run.mutated:
+                        mutated_managers.add(tool.id)
+            if run.line.startswith("failed:"):
+                failed.append(tool.id)
+            elif run.line.startswith("skipped:"):
+                skipped += 1
+            elif run.line.startswith("ok: up to date"):
+                unchanged += 1
+            else:
+                updated += 1
+            if run.mutated:
+                record_day = deps.now().date()
+                entries[tool.id] = update_all_state.UpdatedEntry(record_day, "update-all")
+                try:
+                    update_all_state.record_updated(
+                        store, tool.id, today=record_day, by="update-all"
+                    )
+                except OSError:
+                    if "updated-today record not saved" not in clauses:
+                        clauses.append("updated-today record not saved")
+            if log_ok:
+                try:
+                    update_all_state.append_run_log(
+                        log, update_all_state.log_line(deps.now(), tool.id, run.line)
+                    )
+                except OSError:
+                    log_ok = False
+                    clauses.append("run log not saved")
+
+    refusals = _refusal_evidence(deps.tools, first.states)
+    run_entries(
+        lambda day: update_all.plan_managers(
+            deps.tools,
+            first.states,
+            platform_os=ctx.platform_os,
+            updated_today=today_map(day),
+            refusals=refusals,
+        ),
+        first.states,
+    )
+    try:
+        chosen = _refresh_pass(deps)
+        confirmed = _confirmed(deps, chosen)
+    except (CommandError, OSError):
+        chosen = first
+        confirmed = frozenset(
+            tool_id
+            for tool_id in _confirmed(deps, first)
+            if (version := first.states[tool_id].version) is None
+            or MANAGER_OF_SOURCE.get(version.source) not in mutated_managers
+        )
+        clauses.append("second refresh failed; dependents judged on the first pass")
+    refusals = _refusal_evidence(deps.tools, chosen.states)
+    run_entries(
+        lambda day: update_all.plan_dependents(
+            deps.tools,
+            chosen.states,
+            outdated_ids(chosen.states.values()),
+            confirmed=confirmed,
+            platform_os=ctx.platform_os,
+            updated_today=today_map(day),
+            refusals=refusals,
+        ),
+        chosen.states,
+    )
+    return update_all.summary_line(
+        updated=updated,
+        skipped=skipped,
+        unchanged=unchanged,
+        failed=len(failed),
+        first_failed=failed[0] if failed else "",
+        clauses=clauses,
+    ), int(bool(failed))
 
 
 def _run_update_row(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, int]:

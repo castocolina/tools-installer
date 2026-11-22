@@ -586,6 +586,7 @@ class InvalidateFn(Protocol):
 ManagedPackagesFn = Callable[[], tuple[str, ...] | None]
 ReplayGlobalsFn = Callable[[Sequence[str]], tuple[str, ...]]
 ReresolveFn = Callable[[Tool], ManagerOwnership]
+GuardFn = Callable[[ManagerOwnership], UpdateOutcome | None]
 # 15.6-05/D-01: the SAME shape `installer/policy.py::omz_plugins_policy`'s own
 # `terminal_sync` seam uses -- a zero-argument closure that performs the real
 # terminal-config IO and returns an optional warning string. This module
@@ -603,7 +604,8 @@ class UpdateService:
     latch is a no-op that names the in-flight tool.
 
     `run` order is load-bearing, not an implementation detail:
-    0. Fresh ownership re-resolution (never the 6-hour cached snapshot).
+    0. Fresh ownership re-resolution (never the 6-hour cached snapshot), then the optional
+       guard before any receipt read, capture or mutation.
     1. Pre-capture the pnpm-managed package set when the tool is pnpm itself.
     2. Mutate via `perform_update`.
     3. Replay the captured snapshot only after `updated`.
@@ -666,6 +668,13 @@ class UpdateService:
 
     def run(self, target: UpdateTarget) -> UpdateOutcome:
         """Re-resolve, pre-capture, mutate, replay, invalidate — in that order."""
+        return self._run(target, None)
+
+    def run_guarded(self, target: UpdateTarget, guard: GuardFn) -> UpdateOutcome:
+        """Guard the fresh ownership before any receipt read or mutation."""
+        return self._run(target, guard)
+
+    def _run(self, target: UpdateTarget, guard: GuardFn | None) -> UpdateOutcome:
         fresh = self._reresolve_ownership(target.tool)
         if fresh.owner == "unknown" or fresh.confidence not in ownership_mod.MUTATION_GRADE:
             return UpdateOutcome(
@@ -674,6 +683,10 @@ class UpdateService:
                 owner=fresh.owner,
                 detail=fresh.unknown_reason or _FALLBACK_UNKNOWN,
             )
+        if guard is not None:
+            refusal = guard(fresh)
+            if refusal is not None:
+                return refusal
         fresh_target = UpdateTarget(tool=target.tool, ownership=fresh)
         # The one mutation gate for `u` and the execute screen (G3): an update
         # would replace the changed file and erase the drift evidence.

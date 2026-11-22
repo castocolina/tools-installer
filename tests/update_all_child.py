@@ -8,7 +8,18 @@ from pathlib import Path
 
 import setup
 from installer import schedules
+from installer.model import Tool
 from installer.platform import Platform
+from installer.schedule_run import RunDeps
+from installer.update import UpdateOutcome
+from tests.update_all_doubles import (
+    ScriptedProbe,
+    SequenceRefresher,
+    SpyService,
+    catalog_tool,
+    run_deps,
+    state,
+)
 from tests.update_check_child import patch
 from tests.update_check_doubles import real_service
 
@@ -43,6 +54,39 @@ def main(config_path: str, argv: list[str]) -> int:
             return service, UpdateSpy(), None, None
 
         patch(setup, "_build_services", services)
+        scenario = config.get("scenario", "empty")
+        if scenario in ("three", "failing"):
+            now = datetime.now(UTC)
+            brew, uv, ruff = (catalog_tool(name) for name in ("brew", "uv", "ruff"))
+            states = {
+                "brew": state(brew, "installer"),
+                "uv": state(uv, "installer"),
+                "ruff": state(ruff, "brew" if scenario == "failing" else "uv", outdated=True),
+            }
+            outcomes = (
+                {"brew": UpdateOutcome("brew", "failed", "installer", "boom")}
+                if scenario == "failing"
+                else {}
+            )
+            spy = SpyService(outcomes)
+            runs = spy.runs
+            ctx = schedules.context_for(
+                "fedora", checkout=Path(config["checkout"]), read_models=lambda _a: None
+            )
+            deps = run_deps(
+                [brew, uv, ruff],
+                ctx,
+                service=spy,
+                owners={key: item.ownership for key, item in states.items()},
+                refresh=SequenceRefresher(home / "versions", [states], clock=lambda: now),
+                now=lambda: now,
+                probe=ScriptedProbe({name: ["1", "2"] for name in states}),
+            )
+
+            def build_deps(_tools: list[Tool], _platform: Platform) -> RunDeps:
+                return deps
+
+            patch(setup, "_schedule_run_deps", build_deps)
         code = setup.main(argv)
         ctx = schedules.context_for(
             "fedora", checkout=Path(config["checkout"]), read_models=lambda _a: None
