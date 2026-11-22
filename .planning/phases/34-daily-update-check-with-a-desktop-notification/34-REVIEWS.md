@@ -389,3 +389,200 @@ The revised plans now specify the self-update clause and a link-safe writer for 
 3. **Require evidence at the boundary each test claims to prove.** A fake Git runner proves argv, not checkout immutability. A replayed check result proves logging, not production composition. A success glyph proves display status, not a fresh invocation. Close those gaps without expanding the owner-only desktop UAT scope.
 
 **Status: Issues found — revise and re-review.** This was a read-only review of the on-disk plans and source. No files were edited, no tests or containers were run, and no host schedules or notifications were triggered.
+
+
+## Lane Log (convergence cycle 3, plans at 60b674da)
+
+| Time (local) | Lane | Check | Result |
+|---|---|---|---|
+| 23:00 | opencode-referee-one | one-shot probe | OK |
+| 23:00 to about 23:35 | opencode-referee-one | real review through `gsd-tools query review-lane invoke`, background, 2700 s timeout, stdin `/dev/null`, prior findings supplied | exit 0, stderr empty |
+
+Failures this cycle: none. No other lane or model was used.
+
+## Orchestrator verification of the cycle 3 concerns
+
+Cycle 3 of 3: the cap. Real HIGH by cycle: 7, 5, now 8 distinct (second-order gaps in the previous round's fixes; the count is not falling). Under the owner's cap rule this is the LAST revision and the run executes right after it, with no cycle 4; what the post-execution review, security audit and verifier find goes to the fix round. Claims that rest on repository code are for the planner to verify. DECISIONS apply exactly; all provisional.
+
+| Id | Claim | Judgment and DECISION |
+|---|---|---|
+| H1 (34-01) | A directory at `update-check.json` can interrupt uninstall after partial cleanup (the loop unlinks entries in order and raises on a directory) | Real by the referee's reading (`installer/schedules.py:1837-1853`; `installer/uninstall.py:829-838`). DECISION: leave an unexpected directory and its contents untouched, report it, and still clean the unrelated owned artifacts; add that uninstall case beside the regular-file fixture. |
+| M1 (34-02) | The real-child "bus unset" fixture depends on the current UID having a socket (clearing variables does not disable the `/run/user/<uid>/bus` probe) | Real. DECISION: inject a false socket probe in that test and isolate the environment inherited by the fake `osascript`. |
+| M2 (34-02) | Sanitized stderr is not necessarily safe to log or byte-stable (credentials, echoed text, tabs) | Real. DECISION: fixed notifier failure categories even with nonempty stderr; assert byte equivalence for the assembled result, not for `reason_line` alone. |
+| H2 (34-03) | The cache loaders use blocking unbounded `read_text()`; a non-regular file can stall the check while it holds the shared lock | Real by the referee's reading (`installer/version_cache.py:156-179`; `installer/version_status.py:1838-1846`; `installer/atomic.py:186-215`). DECISION: both cache reads use `read_capped` with an explicit final-symlink policy; test a non-regular file (a FIFO or directory) that must not block. |
+| M3 (34-03) | The tests miss the production path: "every saved entry gets a failure stamp" is wrong (only the attempted 20 are merged); the digest test omits `on_failure`, which the scheduled caller always supplies; "eligible rows only" is broader than the fixture (a dangling artifact can supply ownership before the presence check) | DECISION: assert exactly which 20 entries were stamped; run the digest test with the sink enabled; narrow the eligibility claim to what the fixture proves and record the dangling-artifact exception. |
+| H3 (34-04) | Stale evidence can still add or remove an id: `outdated_ids` hits are all treated as confirmed; a failed resolver can return `outdated=True, stale=True`; manager failures backfill old maps and report them with `stale=False` | Real by the referee's reading (`installer/version_status.py:186-194,401-431,642-689,1728-1758`). DECISION: for the daily check an id is CONFIRMED (in or out) only when its comparison is not stale AND its latest-version stamp is newer than the run's start; anything else is unknown and keeps its prior membership; `outdated_ids` stays pure for Phase 35; test a stale positive and a failed manager query with a prior snapshot through the real service. |
+| H4 (34-04) | The Git boundary still permits what the plan rules out: configured `core.askPass` is not disabled, older Git ignores the lazy-fetch variable yet object queries still run, and `git -C` does not prove the checkout is the Git root (an unpacked installer nested in another worktree queries that worktree's origin) | Real by the referee's reading (`installer/run.py:181-195`; `setup.py:539-543`). DECISION: also pass `-c core.askPass=` and an empty `GIT_ASKPASS`; verify the worktree root (`rev-parse --show-toplevel` equals the checkout) else skip; skip the object queries on a partial clone (`extensions.partialclone` or a promisor remote in the config) and say older git may ignore the lazy-fetch variable; fixed skip categories; real-git evidence stays an orchestrator or owner observation (pytest forbids real git). |
+| H5 (34-05) | `--frozen` protects `uv.lock`, not the checkout or the allowed-write boundary: Python bytecode can be written into the checkout, uv and manager scratch and cache writes sit outside installer state, and `uv tool list --outdated` runs separately | Real by the referee's reading (`installer/helper_assets/schedule_runner.py:191-195,320-340`; `setup.py:26-40,65-99`; `installer/manager_versions.py:253-258`). DECISION: the check child also runs with `PYTHONDONTWRITEBYTECODE=1` (pinned by the argv/env test); narrow the claim honestly: NO writes into the checkout, writes into installer state only to the named files; uv's own cache and manager-query scratch are outside the installer's state and are an accepted exception recorded as a dated amendment of the SPEC prohibition in 34-06 (as for every other schedule row); real-launch evidence is the orchestrator's container observation. Provisional. |
+| M4 (34-05) | "Every child gets closed stdin" exceeds the change: the bare CLI's refresh reaches `run_query`, which does not close stdin | DECISION: qualify the claim (the runner route) and test the two routes separately; do not change interactive query behavior. |
+| H6 (34-06) | The architecture text documents exceptions (credential-bearing proxy values, outside-state uv writes) that the SPEC still prohibits (`34-SPEC.md:68,121`) | Real contract conflict. DECISION: put the effective wording in the NORMATIVE SPEC clauses with a dated amendment record: proxy values the user configured are carried like for every row (existing private 0600 units), uv and manager scratch/cache writes are accepted as for every row, daily limit = timer cadence, CLI stdout versus runner `waited:`/`start`/one result. Provisional, needs confirmation. |
+| M5 (34-06) | SPEC acceptance 6 still says a separate self-update line and the plan says the ROADMAP criterion 5 is the only edit though it prescribes goal and criterion 1 changes; the pilot can keep the previous `Rows` height if status clears without a repaint | DECISION: reconcile acceptance 6 and the ROADMAP edit list; use separately settled layouts for the viewport tests or test the repaint after a status-height change. |
+| H7 (34-07) | A new pair can belong to another activation: the live timer may fire between the baseline and the manual start; the log reader hides read errors | Real (`installer/schedules.py:980-991`; `installer/systemd_daemon.py:335-349`). DECISION: fail closed on a baseline read error and on argv-generation errors; require EXACTLY one new start/ok pair after the baseline (a second pair is a failure the orchestrator retries, never a false pass) and say a coincident timer firing yields a failure, not a pass. |
+| M6 (34-07) | The verdict and its fixtures disagree (a lone new `start` goes to `RUN_UNEXPECTED`, not `RUN_MISSING`); the host fixtures extract functions by explicit name and miss the new helpers; the direct route discards the argv producer's exit status | DECISION: align verdicts and fixtures; include the new helpers in the extraction; the direct route checks the producer's exit status; pin a direct launch that emits a valid pair but exits nonzero. |
+| M7 (34-07) | Cell time and teardown markers can misstate: the cell is compared by slicing `HH:MM` though the driver renders local time (`✓ 1d` after midnight); the teardown marker prints even if removal fails and the runtime need not be Podman | DECISION: compare the Last cell by the driver's clock rule; confirm cleanup in the runtime that ran the container. |
+| H8 (34-09) | The checkout snapshot does not cover the checkout used by the check: the in-process call derives it from `setup.__file__`; nothing binds it to `tmp_path/co` or asserts the Git seam's `-C` path; the fake `uv` only replays output | Real (`setup.py:529-561`). DECISION: bind the job to the scratch checkout (patch the checkout resolution) and assert the exact `-C` path seen by the Git seam; the runner's fake child invokes the real parser, wiring and dispatch (a small Python script as the fake `uv`) and the snapshot spans that call; a pure replay stays as a separate, labeled log test. |
+| M8 (34-09) | The replay command cannot resolve `cat` under a PATH holding only the fake-bin directory | Real. DECISION: use the Python interpreter by absolute path (`sys.executable`) as the child, not `cat`. |
+| L1 (34-08) | The typed fake recipe leaves `RunDeps(...)` and `run_check(...)` as ellipses | DECISION: specify two matching tool objects, inert typed deps and a fresh call list. |
+| C1 (cross) | The ROADMAP still says "8 plans" and carries a stale open-question note | The planner updates the ROADMAP plan count and removes the stale note; acceptance-critical instructions live in the sections Pi receives. |
+| C2 (cross) | 34-04's deselected run must not be described as a green `make test` | State it as a named red-guard exception in 34-04's SUMMARY instructions. |
+| X | Final gates with the default TMPDIR | Standing ruling; not raised: keep the note in the 34-01 ledger only. |
+
+## OpenCode Review (opencode-referee-one), cycle 3
+
+Using the plan-review checklist, Ponytail Review, and codebase-memory to check all nine plans against the repository. I’ll distinguish resolved cycle-2 findings from remaining blockers and won’t run the installer, schedules, or containers.
+The proposed `--frozen` flag protects `uv.lock`, not the whole checkout or filesystem. The new integration test also snapshots a scratch checkout that `setup.main` is not wired to use, then replays its output through the runner. Those are separate gaps in the write-boundary proof.
+**What this change does:** Phase 34 adds a default-on daily check for installed-tool updates and updates to the installer checkout. It reuses the schedule lock and version service, writes one result line per completed check, and attempts a desktop notification when the known outdated set changes to a nonempty set.
+
+**Verdict: revise before execution.** The cycle-2 revisions close several real gaps. The remaining blockers are that stale evidence can still change the notified set, the scheduled launch does not meet the stated write boundary, and the container harness can still certify the wrong invocation. The daily cadence, notifier argv choices, and owner-only desktop checks do not need to be reopened.
+
+## 34-01
+
+**Summary:** Registers the eighth row, adds `Schedule.daily`, and extends the engine, layout, and uninstall tests.
+
+**Findings status:** The 29-failure baseline now has one coherent RED → production edits → untouched baseline → pin edits → GREEN sequence. The plan also distinguishes ordinary turn-off from uninstall and tests the actual GitHub-token-variable boundary.
+
+**Strengths:** The daily flag replaces the calendar and editor decisions without changing Linux tmp cleanup’s fixed timer. The generic renderers already accept the new calendar, and the default-on reconcile gates only actual update rows on tool presence (`installer/schedules.py:838–850,925–955,1691–1712`; `installer/schedules_screen.py:377–396,496–502,569–581,713–727`).
+
+**Concerns:**
+- **HIGH — A directory at `update-check.json` can interrupt uninstall after partial cleanup.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-01-PLAN.md:135,155` inserts the path before the logs. The cleanup loop unlinks entries in order, so a directory there can raise after schedule state has already been deleted and before the logs are removed. The sweep then records the adapter as failed. The planned fixture only plants a regular file (`installer/schedules.py:1837–1853`; `installer/uninstall.py:829–838`; `tests/test_schedules_lifecycle.py:562–576`).
+
+**Suggestions:** Leave an unexpected directory and its contents untouched, report it, and still clean the unrelated owned artifacts. Add that uninstall case alongside the regular-file fixture. Keep the proxy-parity test, but align the locked prohibition as noted under 34-06.
+
+**Risk Assessment:** **High for uninstall recovery; low for the cadence design.** Keep the explicit no-rollout restriction through wave 4.
+
+## 34-02
+
+**Summary:** Adds the shared notifier, constant AppleScript source, Linux bus fallback, and runner-only environment forwarding.
+
+**Findings status:** The raising socket probe now falls through, empty stderr gets a fixed reason rather than the command line, and 34-05 adds a fake-executable macOS failure path through the log. Real LaunchAgent delivery remains deferred.
+
+**Strengths:** The existing subprocess helper passes argv without a shell and closes stdin. The runner and unit have distinct allowlists, so forwarding the bus at runtime does not require serializing it in either unit format (`installer/run.py:115–150`; `installer/helper_assets/schedule_runner.py:82–97,191–195`; `installer/daemon.py:34–59`).
+
+**Concerns:**
+- **MEDIUM — The real-child “bus unset” fixture does not pin the fallback.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-02-PLAN.md:139–146,158` clears environment values but leaves the real-child case dependent on whether the current UID has a socket. Clearing the variables alone does not disable the planned `/run/user/<uid>/bus` probe, and the subprocess receives the adapter’s resulting environment (`installer/run.py:133–144`).
+- **MEDIUM — Sanitized stderr is not necessarily safe to log or byte-stable.** The plan still forwards nonempty stderr and calls the helper’s result byte-stable (`.planning/phases/34-daily-update-check-with-a-desktop-notification/34-02-PLAN.md:143–147,158,240`). The subprocess wrapper retains stderr; control stripping does not remove credentials or echoed message text, and it preserves tabs that the runner later collapses (`installer/run.py:145–150`; `installer/sanitize.py:9–22`; `installer/helper_assets/schedule_runner.py:129–134`).
+
+**Suggestions:** Inject a false socket probe in the no-bus test and explicitly isolate the environment inherited by the fake `osascript`. Prefer fixed notifier failure categories even with nonempty stderr. Assert byte equivalence for the assembled result, not for `reason_line` alone.
+
+**Risk Assessment:** **Medium.** The selected platform argv forms can stay; the remaining issues concern deterministic tests and what reaches the log.
+
+## 34-03
+
+**Summary:** Threads the shorter freshness window and failure sink through the refresh service, adds `outdated_ids`, and replaces the final cache entry atomically.
+
+**Findings status:** Mixed-source coverage and manager-snapshot reuse are now described correctly. The eligibility test covers an ordinary missing tool, not the dangling-artifact case. The final-symlink *write* is addressed; the read boundary is not.
+
+**Strengths:** The plan threads the same window through budget accounting and the real fetch gate, without changing the default. Keeping the production resolver’s identity preserves the digest path. The pure helper correctly separates version status from health precedence (`installer/version_status.py:390–432,1879–1905,1029–1056`; `installer/version_cache.py:216–231`; `installer/versions.py:436–446`).
+
+**Concerns:**
+- **HIGH — The cache can block before the safe writer runs.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-03-PLAN.md:196–204` widens decode handling but leaves both cache loaders on blocking, unbounded `read_text()`. The scheduled job reads the file before refresh and the service reads it again. A non-regular file can stall the check while it holds the shared lock (`installer/version_cache.py:156–179`; `installer/version_status.py:1838–1846`; `installer/schedule_run.py:136–148`).
+- **MEDIUM — The test assertions miss the production path in two places.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-03-PLAN.md:117–120` says every saved entry gets a failure stamp even though the service merges only the attempted 20 into the seeded 24. The digest test also omits `on_failure`, which the scheduled caller always supplies. A wrapper added only on that path could pass the test and discard digests (`installer/version_status.py:1975–1978,2013–2017`; `installer/versions.py:436–446`).
+- **MEDIUM — “Eligible rows only” is broader than the fixture proves.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-03-PLAN.md:118,252–254` acknowledges the dangling-artifact exception. Ownership can come from a dangling artifact, and the budget decision precedes the presence check (`installer/uninstall.py:35–53`; `installer/ownership.py:1099–1106`; `installer/version_status.py:1870–1915`).
+
+**Suggestions:** Reuse `read_capped` for both cache reads, with an explicit final-symlink policy and a non-regular-file test (`installer/atomic.py:186–215`). Assert exactly which 20 entries were stamped and run the digest test with the sink enabled. Either prove that dangling artifacts cannot spend scheduled slots or narrow the eligibility claim.
+
+**Risk Assessment:** **High** until cache reads are bounded; the freshness plumbing itself fits the existing service.
+
+## 34-04
+
+**Summary:** Implements the Git self-check, notified-set persistence, membership decisions, oldest-attempt ordering, and result formatting.
+
+**Findings status:** Failed origin queries and stale negative resolver results now preserve prior membership. The notified file has a strict, link-safe read/write design, and the named reachability exception is contained. Git isolation and confirmed-only membership remain incomplete.
+
+**Strengths:** The self-update clause is independent of delivery, and the notified file uses the right two primitives: a capped, no-follow read and replacement of the file entry rather than its target (`.planning/phases/34-daily-update-check-with-a-desktop-notification/34-04-PLAN.md:179,219,228`; `installer/atomic.py:58–73,186–215`).
+
+**Concerns:**
+- **HIGH — Stale evidence can still add or remove an ID.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-04-PLAN.md:180,215–216,228` treats every `outdated_ids` hit as confirmed in. A failed or deferred resolver can return `outdated=True, stale=True`. Manager failures are less visible: the service backfills old maps, and the manager branch reports those comparisons with `stale=False`. An old report can therefore trigger a notice about an update already installed, or cause a false change in membership (`installer/version_status.py:186–194,401–431,642–689,1728–1758`).
+- **HIGH — The Git boundary still permits behavior the plan rules out.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-04-PLAN.md:128–136,271–274` disables credential helpers but leaves configured `core.askPass` available; Git can try it before the terminal. The plan also acknowledges older Git may ignore the lazy-fetch setting, yet still issues object queries. Lastly, `git -C` does not prove the intended directory is the Git root: an unpacked installer nested inside another worktree can query that worktree’s origin (`installer/run.py:181–195`; `setup.py:539–543`; Git credentials manual, `gitcredentials.adoc:25–42`).
+
+**Suggestions:** Keep Phase 35’s pure `outdated_ids` contract. For the daily check, use evidence that distinguishes confirmed comparisons from failed or deferred ones in **both** directions; test a stale positive and a failed manager query with a prior snapshot through the real service. For Git, verify the worktree root, disable configured prompting, and skip operations whose no-fetch or no-token guarantees cannot be enforced. Keep fixed diagnostic categories and require separate disposable Git evidence; pytest forbids real Git (`tests/sandbox.py:41–54`).
+
+**Risk Assessment:** **High.** These gaps affect what the notification tells the user and whether the self-check stays within its read-only contract.
+
+## 34-05
+
+**Summary:** Wires the CLI, dispatch, shared lock, and runner, then adds log-path tests and a frozen child launch.
+
+**Findings status:** The first task now clears the named orphan. Closed outer stdin, check-specific timeout text, and failing-`osascript` log composition are specified. The production write boundary is only partially addressed.
+
+**Strengths:** The new kind fits the two existing lock branches without changing cleanup refusal. The runner is the right boundary for testing the single result line because it owns logging and chooses the child’s last recognized result (`installer/schedule_run.py:121–148`; `setup.py:547–567`; `installer/helper_assets/schedule_runner.py:345–358,484–523`).
+
+**Concerns:**
+- **HIGH — `--frozen` protects `uv.lock`, not the checkout or the allowed-write boundary.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-05-PLAN.md:174,189,232` explicitly leaves uv cache and temporary-environment writes outside installer state. The child also runs from the checkout and imports local modules, so ordinary Python bytecode can create checkout files even with a frozen lockfile. The production refresh invokes `uv tool list --outdated` separately; the launch flag does not constrain that command (`installer/helper_assets/schedule_runner.py:191–195,320–340`; `setup.py:26–40,65–99`; `installer/compose.py:411–426`; `installer/manager_versions.py:253–258`). The locked constraint still prohibits outside writes.
+- **MEDIUM — The “every child gets closed stdin” claim exceeds the proposed test and change.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-05-PLAN.md:181,189` closes stdin for the runner’s direct subprocess. That covers descendants on the scheduled route by inheritance, but the bare CLI’s refresh still reaches `run_query`, which does not close stdin itself (`setup.py:529–567`; `installer/version_status.py:1246–1255,1716–1727`; `installer/run.py:438–461`).
+
+**Suggestions:** Define and enforce the scheduled launch’s write boundary before calling T-34-21 mitigated. Prevent checkout bytecode writes, account for uv and manager scratch/cache writes, and verify the real launch in a disposable environment. Either close stdin explicitly for manual-check queries too or qualify the claim and test the two routes separately.
+
+**Risk Assessment:** **High for the non-mutating claim; low for the shared dispatch design.**
+
+## 34-06
+
+**Summary:** Adds check-row detail text, rendered viewport tests, and architecture, roadmap, and SPEC amendments.
+
+**Findings status:** Permission-first, short limits before `last:`, a larger viewport for the full detail, and the narrower explanatory-copy rule are planned. The amendments still leave conflicting requirements in force.
+
+**Strengths:** Testing the rendered widget is necessary here: `_set_detail` passes a row budget to `Rows`, which wraps and cuts text even when the backing string contains every line (`installer/schedules_screen.py:443–456`; `installer/ui_common.py:70–92`). The phase-specific docs pin follows an existing pattern (`tests/test_docs.py:217–240`).
+
+**Concerns:**
+- **HIGH — The architecture text documents exceptions that the SPEC still prohibits.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-06-PLAN.md:170–172` documents credential-bearing proxies and outside-state uv writes, but its SPEC edits do not reconcile the prohibition or the write constraint (`.planning/phases/34-daily-update-check-with-a-desktop-notification/34-SPEC.md:68,121`). The proxy behavior is real and already pinned for private units (`installer/schedules.py:53,891–901,925–955`; `tests/test_systemd_daemon.py:1197–1211`). Documenting it in architecture notes does not amend a locked requirement.
+- **MEDIUM — The acceptance and rendering instructions still conflict.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-06-PLAN.md:171–172,218` leaves SPEC acceptance 6 saying a separate self-update line and says ROADMAP criterion 5 is the only edit despite also prescribing goal and criterion 1 changes. Separately, the pilot at line 124 can retain the previous `Rows` height if it clears status in the same screen without repainting the detail (`.planning/phases/34-daily-update-check-with-a-desktop-notification/34-SPEC.md:22–25,79–84`; `installer/helper_assets/schedule_runner.py:345–358`; `installer/schedules_screen.py:443–456`).
+
+**Suggestions:** Put the effective wording in the normative clauses, with a dated amendment record. Keep the selected cadence and clarify CLI stdout versus runner `waited:`, `start`, and one result. Record the existing proxy exception explicitly; do not treat outside-state writes as approved by implication. Use separately settled layouts for the viewport tests, or explicitly test the repaint after a status-height change.
+
+**Risk Assessment:** **High for contract consistency; medium for UI test execution.** Keep real macOS delivery and notification attribution as owner UAT, not facts established by a golden argv.
+
+## 34-07
+
+**Summary:** Extends both disposable-container routes with a strict check-row verdict and separates the evidence each route provides.
+
+**Findings status:** The obvious stale-success and standalone-busy cases are covered. A fresh pair still does not uniquely identify the requested launch.
+
+**Strengths:** The generic driver already accepts the new ID. The plan correctly separates the check-row service proof, the cache-cleanup calendar and catch-up probes, and direct-mode limitations. The proposed edits are below the classified PATH lines (`tests/e2e_schedules_driver.py:46–85`; `scripts/container-e2e-verify.sh:2623–2668,2794–2812`; `tests/test_shell_scripts_path.py:519–539`).
+
+**Concerns:**
+- **HIGH — A new pair can belong to another activation.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-07-PLAN.md:22,103–107,118` counts lines after enabling the live timer. If the timer fires between the baseline and the manual start, both can refer to the same active service invocation. Also, the current log reader hides read errors, so an unreadable baseline can look empty and old lines can look new later (`installer/schedules.py:980–991`; `installer/systemd_daemon.py:335–349`; `scripts/container-e2e-verify.sh:2489–2492,2576–2581`).
+- **MEDIUM — The verdict and its fixtures disagree.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-07-PLAN.md:106,110,118` expects `RUN_MISSING` for a lone new `start`, but the algorithm sends every one-line delta to `RUN_UNEXPECTED`. The direct spy only proves count forwarding. The existing host fixtures extract functions by explicit name and do not include the new helpers; the direct route also discards the argv producer’s exit status (`tests/test_container_e2e_schedules.py:84–100,501–517,783–811`; `scripts/container-e2e-verify.sh:2764–2769`).
+- **MEDIUM — Cell time and teardown markers can misstate the outcome.** The plan slices `HH:MM` from the log and treats the teardown marker as evidence (`.planning/phases/34-daily-update-check-with-a-desktop-notification/34-07-PLAN.md:22–25,108,118`). The driver converts to its local time and can legitimately render `✓ 1d` after midnight. The teardown marker prints even if removal fails, and the runtime need not be Podman (`installer/schedules.py:517–536,570–582`; `tests/e2e_schedules_driver.py:46–51`; `scripts/container-e2e-verify.sh:224–230,2691–2698`).
+
+**Suggestions:** Isolate the manual activation from timer firing or correlate the actual invocation. Fail closed on baseline-read and argv-generation errors. Test the exact fresh result sequence, allowing a legitimate `waited:` entry, and pin a direct launch that emits a valid pair but exits nonzero. Compare the Last cell using the driver’s clock rule, and confirm cleanup in the runtime that actually ran the container.
+
+**Risk Assessment:** **High verification risk.** As written, the harness can certify the wrong run or reject a correct result.
+
+## 34-08
+
+**Summary:** Pins cross-file argv, CLI choices, environment keys, Phase 35 interfaces, and module rules.
+
+**Findings status:** The duplicate fake notifier call is removed. Exact environment equality and resolved type annotations remain useful guards.
+
+**Strengths:** The six-token slice matches the actual producer, and the runner parser exposes the ID the test needs. The environment equality can catch a dropped shared key, not just an extra one (`installer/schedules.py:853–888`; `installer/helper_assets/schedule_runner.py:82–97,432–474`; `installer/daemon.py:34–47`).
+
+**Concerns:**
+- **LOW — The typed fake recipe leaves its real inputs implicit.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-08-PLAN.md:106,115` leaves `RunDeps(...)` and `run_check(...)` as ellipses. The closest deps fixture supplies one tool; the proposed assertion needs two tool objects whose IDs match the fake states, along with the required typed collaborators (`installer/schedule_run.py:24–32`; `tests/test_schedule_update.py:119–148`).
+
+**Suggestions:** Specify two matching tools, inert typed deps, and a fresh call list. Pass the bound notifier through `deps.notify` and keep the whole-list assertion. Treat static source scans as regression guards, not evidence that runtime diagnostics contain no secrets.
+
+**Risk Assessment:** **Low.** This is a fixture-completeness issue, not a reason to change the Phase 35 interface.
+
+## 34-09
+
+**Summary:** Adds a real-service application test for refresh, adoption, receipt retirement, and cache-link replacement, followed by a runner-log replay.
+
+**Findings status:** Moving receipts inside the snapshot and seeding the adoption digest address two cycle-2 fixture gaps. The new test still does not prove the claimed runner-to-job and checkout boundary.
+
+**Strengths:** The four scenarios target real service branches. Receipt retirement and digest adoption are genuine effects of a refresh, and the autouse fixture would otherwise hide the receipt paths from the HOME snapshot (`installer/version_status.py:1455–1537`; `tests/conftest.py:377–389`; `tests/test_version_status.py:4352–4372`).
+
+**Concerns:**
+- **HIGH — The checkout snapshot does not cover the checkout used by the check.** `.planning/phases/34-daily-update-check-with-a-desktop-notification/34-09-PLAN.md:99–102,127,144` creates `tmp_path/co`, but the in-process call derives its checkout from `setup.__file__`. Nothing in the fixture redirects that value or asserts the Git call’s `-C` path. The later fake `uv` only replays output, and the filesystem comparison precedes it. The test can pass with the wrong checkout or broken runner-to-child wiring (`setup.py:529–561`; `installer/helper_assets/schedule_runner.py:320–358`).
+- **MEDIUM — The replay command cannot resolve `cat` under the specified PATH.** The fixture sets PATH to the fake-bin directory only and then invokes unqualified `cat` (`.planning/phases/34-daily-update-check-with-a-desktop-notification/34-09-PLAN.md:100–101`). The runner forwards that PATH; with only the named fake binary present, the replay child fails (`installer/helper_assets/schedule_runner.py:82–97,191–195,228–234`).
+
+**Suggestions:** Bind the application job to the scratch checkout and assert the exact path seen by the Git seam. Have the runner’s fake child invoke the real parser, wiring, and dispatch rather than replay a line; snapshot across that call. If replay remains a separate log test, label it as such and use an explicit safe utility path. Neither test replaces the disposable real-launch evidence for uv or Git.
+
+**Risk Assessment:** **High verification risk.** The application scenarios are valuable; their current scope is narrower than the phase sign-off claims.
+
+## Cross-plan assessment
+
+1. **Fix the production boundaries before adding more sign-off checks.** Prioritize bounded cache reads, confirmed-only membership, the noninteractive Git boundary, and the scheduled write boundary. Then update the validation map to identify which evidence proves each property.
+2. **Keep the release and test gates visible.** The named 34-04 reachability exception matches the review ledger; 34-05 Task 1 now clears it through a real import, with the guard unchanged. Do not describe 34-04’s deselected run as a green `make test`, or deploy any pre-wiring wave (`.planning/phases/34-daily-update-check-with-a-desktop-notification/34-REVIEWS.md:46,54`; `tests/test_reachability.py:142–162,196–197`; `Makefile:63–64`).
+3. **Give the executor and verifier one consistent contract.** Update the roadmap’s “8 plans” count and stale open-question note: it already lists nine waves and includes the self-check (`.planning/ROADMAP.md:308–322,349–350`). Carry all acceptance-critical instructions in the sections Pi actually receives. Keep fake-process tests, disposable Git/uv/container observations, and owner desktop UAT separate; none is a substitute for the others.
+
+**Status: Issues found — revise before execution.** This was a read-only review of all nine on-disk plans and their source seams. No files were edited, and no tests, installer jobs, containers, or desktop notifications were run.
