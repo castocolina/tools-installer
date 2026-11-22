@@ -240,6 +240,52 @@ def test_architecture_records_phase_21_mechanisms() -> None:
         assert phrase in text, f"missing load-bearing phrase: {phrase}"
 
 
+_PHASE_34_REQUIRED = (
+    "## Phase 34: the daily update check",
+    "check-updates",
+    "Schedule.daily",
+    "installer/notify.py",
+    "Notifier",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "outdated_ids",
+    "stale_after",
+    "update-check.json",
+    "ls-remote",
+    "a shrinking",
+    "brew update",
+    "a day late",
+    "Script Editor",
+    "on any run",
+    "resolver-call cap",
+    "git configuration stays in effect",
+    "uninstall sweep",
+    "shell's own token",
+    "installer behind origin/main",
+    "changed non-empty set",
+    "resets silently",
+    "does not prove delivery",
+    "proxy values",
+    "credential helpers",
+    "lazy fetch",
+    "--frozen",
+    "keeps its prior membership",
+    "link-safe",
+    "core.askPass",
+    "partial clone",
+    "written by this run",
+    "nothing is written into the checkout",
+    "dangling managed artifact",
+    "query scratch",
+)
+
+
+def test_architecture_records_phase_34_mechanisms() -> None:
+    """Keep the daily update check's mechanisms and limits load-bearing."""
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    for phrase in _PHASE_34_REQUIRED:
+        assert phrase in text, f"missing load-bearing phrase: {phrase}"
+
+
 _PHASE_19_REQUIRED = (
     "ToolState",
     "state_of",

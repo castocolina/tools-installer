@@ -307,17 +307,17 @@ Plans:
 
 ### Phase 34: Daily update check with a desktop notification
 
-**Goal**: A user learns that installed tools (and tools-installer itself) have updates without opening the TUI, from one desktop notification a day at most, on Bazzite and macOS.
+**Goal**: A user learns that installed tools (and tools-installer itself) have updates without opening the TUI, from a desktop notification the daily timer sends when the set of outdated tools changes (at most one per timer firing; no date is stored), on Bazzite and macOS. (amended 2026-11-21, needs confirmation: a changed non-empty set triggers a notification attempt on any run, manual or catch-up)
 **Depends on**: Phase 33 (order only: the bot keeps the pins current first; no code dependency)
 **Requirements**: NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-04, NOTIFY-05, NOTIFY-06
 **Note**: Ingested 2026-11-19 from `.planning/todos/pending/2026-11-17-daily-update-check-with-desktop-notification.md` and research feature 1. **Amends 24.2** (owner-approved at the ingest conflict gate, 2026-11-19): `24.2-SPEC.md:179` and `24.2-CONTEXT.md:43` put desktop notifications out of scope; this phase's SPEC records the reversal explicitly, and OQ-NOTIFY-1 was decided there (the update check only; failed runs do not notify). OQ-NOTIFY-1..5 (notify on change vs every run, token vs anonymous, the installer self-check, the click action) were settled in the SPEC interview log and `34-CONTEXT.md`; none is open. Facts: cache staleness `STALE_AFTER = 7 days` (`installer/version_cache.py:44`), at most 20 fetches per refresh (`installer/version_status.py:143`), the schedule unit carries no GitHub token (`installer/daemon.py`).
 **Success Criteria** (what must be TRUE):
 
-  1. `--run-schedule check-updates` in a scratch HOME refreshes versions past the 7-day cache, writes exactly one `ok: N updates available` line to the shared schedule log, and changes no tool.
+  1. `--run-schedule check-updates` in a scratch HOME refreshes versions past the 7-day cache, prints exactly one `ok: N updates available` result line (through the schedule runner the shared log holds `start` and that line, plus a `waited:` entry when the lock was contended), and changes no tool. (amended 2026-11-21, needs confirmation: the bare --run-schedule route prints the line and the schedule runner writes the shared log; a contended run may add a waited: entry before the single result)
   2. Two runs with the same outdated set send one notification; a changed set sends another (test with a fake notifier).
   3. On Linux the runner calls `notify-send` with the session bus address passed to the child; with no `notify-send` it logs `notify skipped` and still exits ok.
   4. On macOS a failing `osascript display notification` logs `notify skipped` without failing the run, and the row detail names the one-time permission; the real-Mac check is a UAT line deferred to the owner's Mac.
-  5. When the self-check is in scope, a checkout behind `origin/main` logs one self-update line from `git ls-remote` and the checkout is unchanged after the run.
+  5. A checkout on `main` behind `origin/main` adds one self-update clause, `installer behind origin/main`, to the one result line, joining the outdated set as `tools-installer`, as read from `git ls-remote`; the checkout is unchanged after the run, and a detached HEAD or another branch is skipped. (amended 2026-11-21, 34 D-21 and orchestrator decision 5, needs confirmation: the runner keeps one result line per run, so a separate self-update line cannot reach the log)
 
 **Plans:** 10 plans
 

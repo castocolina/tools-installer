@@ -6,7 +6,7 @@
 
 ## Goal
 
-A user learns that installed tools (and the installer's own checkout) have updates without opening the TUI, from at most one desktop notification a day, on Bazzite and macOS, produced by a new daily `check-updates` schedule that changes no tool.
+A user learns that installed tools (and the installer's own checkout) have updates without opening the TUI, from a desktop notification sent when the set of outdated tools changes (at most one per timer firing; a manual run, a login catch-up or a retime can notify again when the set changed; no date is stored), on Bazzite and macOS, produced by a new daily `check-updates` schedule that changes no tool.
 
 ## Background
 
@@ -19,10 +19,10 @@ A user learns that installed tools (and the installer's own checkout) have updat
 
 ## Requirements
 
-1. **Daily headless check row (NOTIFY-01)**: The Schedules engine has a daily `check-updates` row that runs the version refresh headless through `--run-schedule`, writes exactly one `ok: N updates available` line to the shared schedule log (any notify-skipped or self-update text rides in that one line as `; ` clauses *(amended 2026-11-19, 34 D-21)*), and changes no tool.
+1. **Daily headless check row (NOTIFY-01)**: The Schedules engine has a daily `check-updates` row that runs the version refresh headless through `--run-schedule`, produces exactly one `ok: N updates available` result line per run (any notify-skipped or self-update text rides in that one line as `; ` clauses *(amended 2026-11-19, 34 D-21)*): the bare `--run-schedule` route prints it and the schedule runner writes `start` and that line to the shared schedule log, a contended run adding a `waited:` entry first, and changes no tool.
    - Current: no such row; `run_schedule` rejects non-update kinds.
    - Target: a new `JobKind` and a `check-updates` row (daily interval, default start chosen in discuss) dispatched by the runner.
-   - Acceptance: `--run-schedule check-updates` in a scratch HOME writes one `ok: N updates available` line and no other schedule-log line; a spy on the update executor shows zero calls; the row appears in the Schedules view and the unit templates for both OSes.
+   - Acceptance: `--run-schedule check-updates` in a scratch HOME prints one `ok: N updates available` line (through the runner the shared log holds `start` and that line, plus a `waited:` entry when the lock was contended); a spy on the update executor shows zero calls; the row appears in the Schedules view and the unit templates for both OSes.
 
 2. **Refresh despite the cache window (NOTIFY-02)**: The scheduled check refreshes versions even when the cache is younger than the 7-day staleness window.
    - Current: `STALE_AFTER = 7 days` (`version_cache.py:44`) makes a daily check read cached values.
@@ -59,13 +59,13 @@ A user learns that installed tools (and the installer's own checkout) have updat
 **Out of scope:**
 - Notifications for failed runs of other schedules — decided in the interview (update check only).
 - A click action on the notification — Linux action support differs by desktop and macOS needs a signed helper; not requested.
-- A GitHub token in the schedule unit, or `gh auth` use — lookups stay anonymous.
+- A GitHub token in the schedule unit, or `gh auth` use — lookups stay anonymous; the scheduled run is anonymous by construction and a manual run from a shell uses that shell's own token like every interactive fetch.
 - Updating any tool — that is phase 35.
 - Real-Mac checks — UAT lines deferred to the owner's Mac.
 
 ## Constraints
 
-- The check changes no tool and writes no file outside the installer's own state and log directories.
+- The check changes no tool and writes nothing into the installer's checkout; inside the installer's state it writes only `update-check.json`, `versions.json`, receipt housekeeping through the existing receipts path and the schedule log; uv's own cache and temporary environment and the package managers' query scratch lie outside that directory exactly as for every other schedule row (accepted).
 - No sudo; children run with stdin closed; the run takes the run lock like other schedules (a held lock gives `skipped: busy`).
 - Tests use a scratch HOME and fakes for `notify-send`, `osascript` and the fetcher; no real notification is sent from tests.
 - `make validate && make test` pass on the commit.
@@ -74,14 +74,28 @@ A user learns that installed tools (and the installer's own checkout) have updat
 
 *(amended 2026-11-19, 34 D-01: the 24.2 cut of desktop notifications is reopened for the daily update check only; notifications for failed runs stay out of scope. Owner-approved at the 2026-11-19 ingest gate.)* The statements amended are `24.2-SPEC.md:179` and `24.2-CONTEXT.md:43`.
 
+## Amendment of the daily limit, the logging wording and the write boundary
+
+*(amended 2026-11-22, round 3 H6 and M5, provisional, needs confirmation)*: The normative clauses carry the effective wording; the originals were:
+
+- Goal was: "A user learns that installed tools (and the installer's own checkout) have updates without opening the TUI, from at most one desktop notification a day, on Bazzite and macOS, produced by a new daily `check-updates` schedule that changes no tool."
+- Requirement 1 was: "writes exactly one `ok: N updates available` line to the shared schedule log (any notify-skipped or self-update text rides in that one line as `; ` clauses *(amended 2026-11-19, 34 D-21)*), and changes no tool."
+- Requirement 1 Acceptance was: "`--run-schedule check-updates` in a scratch HOME writes one `ok: N updates available` line and no other schedule-log line; a spy on the update executor shows zero calls; the row appears in the Schedules view and the unit templates for both OSes."
+- Acceptance criterion 1 was: "`--run-schedule check-updates` writes one `ok: N updates available` line and calls no update executor."
+- Acceptance criterion 6 was: "A checkout behind `origin/main` logs one self-update line and stays byte-identical."
+- Constraint was: "The check changes no tool and writes no file outside the installer's own state and log directories."
+- Prohibition 2 was: "The check MUST NOT write a GitHub token or any credential into a unit file, log or state file"
+- Out-of-scope token line was: "A GitHub token in the schedule unit, or `gh auth` use — lookups stay anonymous."
+- R2 concurrency edge was: "two refreshing processes are last-writer-wins with at most one entry lost and the file never corrupted"
+
 ## Acceptance Criteria
 
-- [ ] `--run-schedule check-updates` writes one `ok: N updates available` line and calls no update executor.
+- [ ] `--run-schedule check-updates` in a scratch HOME prints one `ok: N updates available` line (through the runner the shared log holds `start` and that line, plus a `waited:` entry when the lock was contended) and calls no update executor.
 - [ ] A cache younger than 7 days is refreshed by the check, within the 20-fetch cap.
 - [ ] Same outdated set twice sends one notification; a changed set sends another; an emptied set sends none.
 - [ ] Linux: fake `notify-send` receives the argv and bus address; without it, `notify skipped` and exit 0.
 - [ ] macOS: the `osascript` argv golden file passes on both OSes; a failing `osascript` logs `notify skipped` and exits 0; the permission is named in the row detail.
-- [ ] A checkout behind `origin/main` logs one self-update line and stays byte-identical.
+- [ ] A checkout on `main` behind `origin/main` adds the clause `installer behind origin/main` to the result line and stays byte-identical; a detached HEAD, another branch, a partial clone, a checkout that is not its own worktree root or an unreachable remote adds no behind clause.
 - [ ] The row appears in the Schedules view and in both OSes' unit templates.
 
 ## Edge Coverage
@@ -98,7 +112,7 @@ A user learns that installed tools (and the installer's own checkout) have updat
 | concurrency | R1 | 🧪 backstop | held-out test: a run while the run lock is held logs `skipped: busy` and exits ok, as the update rows do |
 | boundary | R2 | ✅ covered | Acceptance 2: a cache aged one second under, exactly at, and one second over 7 days all refresh; the 20-fetch cap is asserted at 20 and 21 tools |
 | precision | R2 | ✅ covered | Acceptance 2: the cap and the age are integers and timedeltas compared exactly, with no rounding step |
-| concurrency | R2 | 🧪 backstop | held-out test: the TUI's view-entry refresh takes no run lock (only mutations do, 24.2 D-12); two refreshing processes are last-writer-wins with at most one entry lost and the file never corrupted (version_status.py:17-24), healed by the next refresh |
+| concurrency | R2 | 🧪 backstop | held-out test: the TUI's view-entry refresh takes no run lock (only mutations do, 24.2 D-12); two refreshing processes are last-writer-wins with the earlier writer's pass possibly lost (a pass saves up to 20 entries at once) and the file never corrupted (version_status.py:17-24), healed by the next refresh |
 | adjacency | R3 | ✅ covered | Acceptance 3: a set that differs by one tool counts as changed; the same tools in another order do not |
 | empty | R3 | ✅ covered | Acceptance 3: an emptied set sends none and resets the stored set; a missing or corrupt state file is empty |
 | ordering | R3 | ✅ covered | Acceptance 3: sets compare as sets, so list order never triggers a notification |
@@ -118,7 +132,7 @@ A user learns that installed tools (and the installer's own checkout) have updat
 | Prohibition (must-NOT statement) | Requirement | Status | Verification / Reason |
 |----------------------------------|-------------|--------|------------------------|
 | The check MUST NOT install, update, remove or pull anything | 1 | resolved | test: spy on the update executor and a byte-comparison of the checkout |
-| The check MUST NOT write a GitHub token or any credential into a unit file, log or state file | 2 | resolved | test: grep of the generated unit text and state for token patterns; lookups are anonymous |
+| The check MUST NOT write a GitHub token (`GITHUB_TOKEN`, `GH_TOKEN`) into a unit file, log or state file; proxy values the user configured are carried into every schedule row's private (0600) unit like for every other row (existing behavior, approved in 24.2 F8) | 2 | resolved | test: grep of the generated unit text and state for token patterns; lookups are anonymous |
 | The notification text MUST NOT carry unescaped tool names into the AppleScript or shell command line | 5 | resolved | test: a tool name containing a quote and a backslash produces a safe argv |
 
 ## Ambiguity Report

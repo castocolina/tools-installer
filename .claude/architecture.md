@@ -1251,3 +1251,68 @@ The replaced forks cannot return silently: `test_the_replaced_forks_are_gone`
 fails when any deleted name (per-screen in-flight flags and messages, the old
 refresh workers and messages, the owner hints, `ToolRow`) is named again in
 `installer/` or `setup.py`, tracked or not.
+
+## Phase 34: the daily update check
+
+`check-updates` is a Schedules row of `JobKind.CHECK_UPDATES`, on by default
+and daily at 09:00. Its cadence comes from `Schedule.daily`, not its kind.
+
+`installer/notify.py` is the one notification seam (`Notifier`, `notifier_for`):
+it uses argv lists only, with AppleScript title and body passed as `argv` data.
+The runner passes `DBUS_SESSION_BUS_ADDRESS` to its child; nothing is added to
+unit environment keys, and `daemon.ENVIRONMENT_KEYS` stays closed.
+
+`outdated_ids(states)` in `installer/version_status.py` is the one outdated set,
+read from version state rather than `Health.OUTDATED`; Phase 35 reuses it.
+The refresh accepts per-call `stale_after` (20 hours for this check) and orders
+by last attempt, oldest first, within a 20-fetch resolver-call cap shared by
+GitHub, npm and Bun. `K lookups failed` counts resolver failures only, not pnpm,
+uv or brew manager-query failures. The timer's run is anonymous by construction:
+GitHub token variables never reach a unit, runner child or log, while proxy values
+the user configured ride into every row's private unit. A manual
+`--run-schedule check-updates` uses the shell's own token like interactive fetches.
+
+The notified set lives in `update-check.json` beside `schedules.json`; it is
+read strictly and saved only after a successful notification, with a writer that
+replaces a planted link. Only the uninstall sweep deletes it; turning off the
+last row leaves it. An unknown id (failed lookup or origin query, no version,
+stale comparison, or a stamp not written by this run) keeps its prior membership;
+only a confirmed change moves it. Confirmed means a non-stale comparison whose
+stamp was written by this run: the cache entry for resolver sources, the manager
+snapshot for brew, cask, pnpm and uv. A tool skipped as fresh, such as one the
+TUI refreshed earlier that day, stays unknown until the next run; an uninstalled
+tool leaves at once because presence is local. Thus a transient failure does
+not re-notify on recovery. The version cache is link-safe: a planted
+`versions.json` link is replaced, never written through; invalid UTF-8 reads empty.
+
+The self-check uses read-only git `rev-parse`, `ls-remote`, `cat-file` and
+`merge-base`, silently skips detached HEAD and branches other than `main`, and
+never fetches or pulls. It logs fixed failure categories, never git output. Its
+isolation removes hooks, prompts, askpass helpers (`-c core.askPass=` and empty
+`GIT_ASKPASS`), credential helpers (`-c credential.helper=`) and lazy fetch
+(`GIT_NO_LAZY_FETCH`, honored from git 2.44; older git may ignore it), while the
+user's git configuration stays in effect. It skips a checkout that is not its
+own worktree root and skips object queries on a partial clone, each with a fixed
+skip category.
+
+The runner starts the child with `uv run --frozen` and
+`PYTHONDONTWRITEBYTECODE=1`, so nothing is written into the checkout, including
+its lockfile or bytecode. Installer state holds only the named files; uv's own
+cache and temporary environment and package managers' query scratch lie outside
+that directory, as for every update row (accepted). One result line,
+`ok: N updates available`, carries extras as `; ` clauses because the runner
+keeps only that line and cuts it at 300 characters; `installer behind origin/main`
+rides it independently of notification.
+
+A changed non-empty set triggers a notification attempt on any run, including
+manual, catch-up or retime: the daily limit is timer cadence and no date is stored.
+An empty set resets silently. A successful command does not prove delivery.
+A change to a shrinking non-empty set notifies again. Brew-owned tools reflect brew's local
+index because the check never runs `brew update`. A catch-up run at login can
+precede the notification daemon, so a notification may arrive a day late. On
+macOS notifications are attributed to Script Editor and need a one-time
+permission; a silently dropped notification cannot be detected by exit code.
+The 20-fetch budget is spent by owner and freshness before presence, so a
+dangling managed artifact can spend a slot. The scheduled route closes stdin
+for every runner child; the bare route closes it for notifier and git children,
+while refresh manager queries inherit the caller's stdin.
