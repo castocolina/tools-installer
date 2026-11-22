@@ -11,16 +11,27 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import threading
 import time
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from installer import daemon, legacy_guard
+from installer import daemon, legacy_guard, notify, update_check
 from installer.helper_assets import schedule_runner
-from installer.run import CHILD_ENV
+from installer.run import CHILD_ENV, CommandError
+from tests.update_check_doubles import (
+    FakeGit,
+    FakeNotifier,
+    FakeRefresher,
+    check_context,
+    outdated_state,
+    tool_named,
+)
 
 _TS = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d"
 _CAP = 262144
@@ -1043,3 +1054,247 @@ def test_a_signal_while_waiting_ends_the_wait_without_a_start_line(
         killer.cancel()
         os.close(holder)
     assert (code, _texts(lines)) == (0, ["skipped: interrupted while waiting for the run lock"])
+
+
+def _check_job(tmp_path: Path, checkout: Path, uv: Path) -> tuple[int, list[str]]:
+    return _run(tmp_path, "check-updates", "--installer", str(checkout), "--uv", str(uv))
+
+
+def test_check_updates_runs_the_installer_child(tmp_path: Path) -> None:
+    checkout = _checkout(tmp_path)
+    body = (
+        'echo "$@" > "{0}/argv"\npwd > "{0}/cwd"\n'
+        'echo "${{PYTHONDONTWRITEBYTECODE-unset}}" > "{0}/bytecode"\n'
+        'echo "ok: 0 updates available"'
+    )
+    bin_dir = tmp_path / "bin"
+    uv = _script(bin_dir, "uv", body.format(bin_dir))
+    code, lines = _check_job(tmp_path, checkout, uv)
+    assert code == 0
+    assert (bin_dir / "argv").read_text().split() == [
+        "run",
+        "--frozen",
+        "--isolated",
+        "--no-dev",
+        "setup.py",
+        "--run-schedule",
+        "check-updates",
+        "--parent-holds-run-lock",
+    ]
+    assert Path((bin_dir / "cwd").read_text().strip()).resolve() == checkout.resolve()
+    assert (bin_dir / "bytecode").read_text().strip() == "1"
+    assert len(lines) == 2
+    assert _texts(lines, "check-updates") == ["start", "ok: 0 updates available"]
+    other = tmp_path / "other"
+    uv = _script(other, "uv", body.format(other))
+    assert _update(tmp_path, uv, checkout)[0] == 0
+    assert (other / "argv").read_text().split() == [
+        "run",
+        "--isolated",
+        "--no-dev",
+        "setup.py",
+        "--run-schedule",
+        "update-claude",
+        "--parent-holds-run-lock",
+    ]
+    assert (other / "bytecode").read_text().strip() == "unset"
+
+
+def test_check_updates_logs_one_pair_per_run(tmp_path: Path) -> None:
+    checkout = _checkout(tmp_path)
+    uv = _script(tmp_path / "bin", "uv", 'echo "ok: 0 updates available"')
+    assert _check_job(tmp_path, checkout, uv)[0] == 0
+    code, lines = _check_job(tmp_path, checkout, uv)
+    assert code == 0
+    assert len(lines) == 4
+    assert _texts(lines, "check-updates") == [
+        "start",
+        "ok: 0 updates available",
+        "start",
+        "ok: 0 updates available",
+    ]
+    _assert_lock_released(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("body", "code", "result"),
+    [
+        (
+            'echo "notify skipped: x"; echo "ok: 1 updates available; notify skipped: boom"',
+            0,
+            "ok: 1 updates available; notify skipped: boom",
+        ),
+        ('echo "failed: boom"; exit 1', 1, "failed: boom"),
+        ("exit 0", 1, "failed: no result line from the installer"),
+    ],
+)
+def test_check_updates_keeps_only_the_last_result_line(
+    tmp_path: Path, body: str, code: int, result: str
+) -> None:
+    checkout = _checkout(tmp_path)
+    uv = _script(tmp_path / "bin", "uv", body)
+    got, lines = _check_job(tmp_path, checkout, uv)
+    assert got == code
+    assert _texts(lines, "check-updates") == ["start", result]
+
+
+def test_check_updates_timeout_names_the_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _checkout(tmp_path)
+    pidfile = tmp_path / "uv.pid"
+    uv = _hanging_uv(tmp_path, f'echo $$ > "{pidfile}"\nsleep 60')
+    monkeypatch.setitem(vars(schedule_runner), "_UPDATE_TIMEOUT", 1)
+    code, lines = _check_job(tmp_path, checkout, uv)
+    pid = int(pidfile.read_text())
+    try:
+        assert code == 1
+        assert _texts(lines, "check-updates") == ["start", "failed: the update check timed out"]
+        assert _gone(pid)
+    finally:
+        _reap(pid)
+    _assert_lock_released(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "args", [["--uv", "u"], ["--installer", "i"], ["extra", "--installer", "i", "--uv", "u"]]
+)
+def test_check_updates_usage_errors_exit_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], args: list[str]
+) -> None:
+    code, lines = _run(tmp_path, "check-updates", *args)
+    assert code == 2
+    assert capsys.readouterr().err.strip()
+    assert lines == []
+    assert not (tmp_path / "state" / "run.log").exists()
+
+
+def test_a_held_run_lock_makes_the_check_skip_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_BOUND", 0.3)
+    monkeypatch.setitem(vars(schedule_runner), "_WAIT_POLL", 0.05)
+    checkout = _checkout(tmp_path)
+    uv = _recorder(tmp_path / "bin", "uv")
+    holder = _hold(tmp_path / "state" / "run.lock", "update-claude 1 2026-11-13T00:00:00+00:00\n")
+    try:
+        code, lines = _check_job(tmp_path, checkout, uv)
+    finally:
+        os.close(holder)
+    assert code == 0
+    assert _texts(lines, "check-updates") == ["skipped: busy"]
+    assert not (uv.parent / "uv.argv").exists()
+
+
+def test_a_token_in_the_parent_environment_never_reaches_the_child_or_the_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _checkout(tmp_path)
+    seen = tmp_path / "env"
+    uv = _script(tmp_path / "bin", "uv", f'/usr/bin/env > "{seen}"\necho "ok: 0 updates available"')
+    for key, value in (("GITHUB_TOKEN", "ghp_planted_value"), ("GH_TOKEN", "gho_planted_value")):
+        monkeypatch.setenv(key, value)
+    code, lines = _check_job(tmp_path, checkout, uv)
+    assert code == 0
+    for secret in ("GITHUB_TOKEN", "GH_TOKEN", "ghp_planted_value", "gho_planted_value"):
+        assert secret not in seen.read_text()
+        assert secret not in "\n".join(lines)
+
+
+def test_every_runner_child_gets_a_closed_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _checkout(tmp_path)
+    uv = _script(tmp_path / "bin", "uv", 'echo "ok: done"')
+    calls: list[Any] = []
+
+    class Spy(subprocess.Popen[bytes]):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            calls.append(kwargs.get("stdin"))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(schedule_runner.subprocess, "Popen", Spy)
+    assert _check_job(tmp_path, checkout, uv)[0] == 0
+    assert _update(tmp_path, uv, checkout)[0] == 0
+    assert calls == [subprocess.DEVNULL, subprocess.DEVNULL]
+
+
+def _line_through_check_runner(tmp_path: Path, line: str) -> tuple[int, list[str]]:
+    checkout = _checkout(tmp_path)
+    result = tmp_path / "result"
+    result.write_text(line + "\n")
+    uv = _script(tmp_path / "bin", "uv", f'/bin/cat "{result}"')
+    return _check_job(tmp_path, checkout, uv)
+
+
+def test_a_real_check_result_survives_the_runner_log_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(UTC)
+    tools = [tool_named("alpha"), tool_named("beta")]
+    reason = "\x1b[31m\x07\x9b31m\x85" + "x" * 500
+    for case in ("failure", "save"):
+        root = tmp_path / case
+        root.mkdir()
+        context = check_context(root / "home", monkeypatch)
+        refresh = FakeRefresher(
+            root / "versions.json",
+            {t.id: outdated_state(t) for t in tools},
+            failures=[(t.id, reason) for t in tools],
+            clock=lambda: now,
+        )
+        git = FakeGit()
+        notifier = FakeNotifier(reason if case == "failure" else None)
+        if case == "failure":
+            git.answers[("ls-remote", "origin", "refs/heads/main")] = CommandError(["git"], 1)
+        else:
+
+            def fail_store(*args: Any, **kwargs: Any) -> None:
+                raise OSError(reason)
+
+            monkeypatch.setattr(update_check, "atomic_replace_entry", fail_store)
+        line, result_code = update_check.run_check(
+            tools, refresh=refresh, notify=notifier, context=context, git=git, clock=lambda: now
+        )
+        assert result_code == 0
+        code, lines = _line_through_check_runner(root, line)
+        assert code == 0
+        assert len(lines) == 2
+        assert _texts(lines, "check-updates") == ["start", line]
+        assert len(line) <= 300
+        assert not re.search(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", line)
+        assert "lookups failed" in line
+        installer_clause = (
+            "installer check skipped" if case == "failure" else "installer behind origin/main"
+        )
+        assert installer_clause in line
+        assert ("notify skipped" if case == "failure" else "notified set not saved") in line
+
+
+def test_a_silently_failing_mac_notifier_reaches_the_log_with_a_fixed_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(UTC)
+    tools = [tool_named("alpha"), tool_named("beta")]
+    context = check_context(tmp_path / "home", monkeypatch)
+    refresh = FakeRefresher(
+        tmp_path / "versions.json", {t.id: outdated_state(t) for t in tools}, clock=lambda: now
+    )
+    script = _script(tmp_path / "bin", "osascript", "exit 1")
+    notifier = notify.notifier_for("macos", which=lambda name: str(script))
+    line, result_code = update_check.run_check(
+        tools,
+        refresh=refresh,
+        notify=notifier,
+        context=context,
+        git=FakeGit(branch="feature"),
+        clock=lambda: now,
+    )
+    assert result_code == 0
+    assert line == "ok: 2 updates available; notify skipped: osascript exited 1"
+    code, lines = _line_through_check_runner(tmp_path, line)
+    assert code == 0
+    assert _texts(lines, "check-updates") == ["start", line]
+    assert len(lines) == 2
+    for forbidden in ("-e", "display notification", "alpha, beta"):
+        assert forbidden not in "\n".join(lines)

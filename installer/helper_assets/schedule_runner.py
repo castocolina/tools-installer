@@ -12,8 +12,9 @@
 
 Argv: `<job> [job args] --log PATH --lock PATH --cap-bytes N` with the jobs
 `tmp-cleanup --script PATH [-- <script args>]`, `cache-cleanup` and
-`update <tool> --installer CHECKOUT --uv UV`. The log id is `tmp-cleanup`,
-`cache-cleanup` or `update-<tool>`.
+`update <tool> --installer CHECKOUT --uv UV`, and
+`check-updates --installer CHECKOUT --uv UV`. The log id is `tmp-cleanup`,
+`cache-cleanup`, `update-<tool>` or `check-updates`.
 
 Every run takes the cross-process run lock. A lock held by another scheduled run is waited
 for (polled, bounded, one `waited:` line); a lock held by the installer, or a wait that passes
@@ -229,6 +230,8 @@ def _run_child(
     try:
         proc = subprocess.Popen(
             argv,
+            # A scheduled child never reads a terminal.
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=_child_env(extra_env),
@@ -319,8 +322,10 @@ def _tmp_cleanup(script: str, forwarded: list[str]) -> str:
     return f"ok: deleted {counts[-1]}" if counts else "ok: done"
 
 
-def _update(run_id: str, installer: str, uv: str) -> str:
-    """Run the installer's own `--run-schedule` for one tool; its last result line is ours."""
+def _update(
+    run_id: str, installer: str, uv: str, *, what: str = "update", readonly: bool = False
+) -> str:
+    """Run the installer's own `--run-schedule`; its last result line is ours."""
     setup = Path(installer) / "setup.py"
     if not setup.is_file():
         return f"failed: installer not found at {setup}"
@@ -330,6 +335,7 @@ def _update(run_id: str, installer: str, uv: str) -> str:
         [
             uv,
             "run",
+            *(["--frozen"] if readonly else []),
             "--isolated",
             "--no-dev",
             "setup.py",
@@ -339,9 +345,10 @@ def _update(run_id: str, installer: str, uv: str) -> str:
         ],
         timeout=_UPDATE_TIMEOUT,
         cwd=Path(installer),
+        extra_env={"PYTHONDONTWRITEBYTECODE": "1"} if readonly else None,
     )
     if child.problem == "timed out":
-        return "failed: the update timed out"
+        return f"failed: the {what} timed out"
     if child.problem is not None:
         return f"failed: installer {child.problem}"
     results = [
@@ -457,6 +464,7 @@ def _parse(argv: list[str]) -> tuple[str, str, dict[str, str], list[str]]:
         "tmp-cleanup": ("--script",),
         "cache-cleanup": (),
         "update": ("--installer", "--uv"),
+        "check-updates": ("--installer", "--uv"),
     }.get(job)
     if required is None:
         raise _UsageError(f"unknown job {job!r}")
@@ -514,6 +522,9 @@ def _locked_run(
             "tmp-cleanup": lambda: _tmp_cleanup(options["--script"], forwarded),
             "cache-cleanup": lambda: _cache_cleanup(emit),
             "update": lambda: _update(run_id, options["--installer"], options["--uv"]),
+            "check-updates": lambda: _update(
+                run_id, options["--installer"], options["--uv"], what="update check", readonly=True
+            ),
         }
         try:
             result = runners[job]()
