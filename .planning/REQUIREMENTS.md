@@ -69,10 +69,10 @@ Ingested 2026-11-19 from the update-automation todos and `.planning/research/202
 - [ ] **AUTOUPD-01**: Schedules has an `update-all` row that is off by default and never a Policies row; once the user sets it, the installer never changes it on its own (amends 24.2 SCHED-01 with a per-row default).
 - [ ] **AUTOUPD-02**: `update-all` updates package managers first (ranked by `resolve._RANK`) *(amended 2026-11-19, 35 D-05, needs confirmation: ordered by ownership edges, because `_RANK` ranks install-method kinds)*, then their dependents grouped by owner and ordered by `deps.resolve_dependencies`.
 - [ ] **AUTOUPD-03**: When a manager's update fails, each of its dependents is skipped and logged as skipped.
-- [ ] **AUTOUPD-04**: `update-all` reuses `UpdateService`, `update_refusal`, `stdin=DEVNULL` children, `HOMEBREW_NO_SUDO` and the run lock; refused tools are skipped with their reason, a held lock makes the run refuse, and no path runs sudo, pkexec or doas.
+- [ ] **AUTOUPD-04**: `update-all` reuses `UpdateService`, `update_refusal`, `stdin=DEVNULL` children, `HOMEBREW_NO_SUDO` and the run lock; refused tools are skipped with their reason, a held lock makes the run refuse, and no path runs sudo, pkexec or doas. *(amended 2026-11-22, 35 orchestrator decisions, needs confirmation: the eight script tools with no update command are skipped by one generic rule; update-all refuses to run as root; every command of the update-all runner runs in its own process group that is ended and awaited within a hard cap (W4))*
 - [ ] **AUTOUPD-05**: Brew casks are excluded from `update-all` on macOS by default.
-- [ ] **AUTOUPD-06**: An `update-all` run writes one run-log line per tool while the shared schedule log keeps one summary line per schedule id.
-- [ ] **AUTOUPD-07**: A tool also covered by a per-tool agent-CLI schedule row is updated at most once per day.
+- [ ] **AUTOUPD-06**: An `update-all` run writes one run-log line per tool while the shared schedule log keeps one summary line per schedule id. *(amended 2026-11-22, 35 orchestrator decisions, needs confirmation: a run that only skipped sends no notification and the notification is an attempt (W3); summary adds an unchanged count)*
+- [ ] **AUTOUPD-07**: A tool also covered by a per-tool agent-CLI schedule row is updated at most once per day. *(amended 2026-11-22, 35 orchestrator decisions, needs confirmation: the record's by is any update schedule id; the per-tool rows skip only what update-all updated (W5))*
 - [ ] **AUTOUPD-08**: `update-all` is exercised end to end in a disposable container (never on the developer host), and whether `uv self update` is safe under `uv run` is verified there.
 
 ## Future Requirements

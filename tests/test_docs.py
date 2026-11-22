@@ -286,6 +286,64 @@ def test_architecture_records_phase_34_mechanisms() -> None:
         assert phrase in text, f"missing load-bearing phrase: {phrase}"
 
 
+_PHASE_35_REQUIRED = (
+    "## Phase 35: opt-in auto-update",
+    "update-all",
+    "default_on",
+    "JobKind.UPDATE_ALL",
+    "installer/update_all.py",
+    "installer/update_all_state.py",
+    "updated-today.json",
+    "update-all.log",
+    "ownership edges",
+    "second pass",
+    "cask excluded",
+    "no unattended update path",
+    "skipped: updated today",
+    "HOMEBREW_NO_SUDO",
+    "UV_NO_MODIFY_PATH",
+    "COMMAND_TIMEOUT",
+    "hold_writes",
+    "--plan",
+    "unchanged",
+    "notify skipped",
+    "updated or failed",
+    "container",
+    "atomic_replace_entry",
+    "skipped: <manager> failed",
+    "antigravity",
+    "fnm",
+    "xcode-clt",
+    "opencode",
+    "rc files",
+    "pnpm self-update",
+    "latest version not confirmed",
+    "manager ownership cycle",
+    "fresh ownership",
+    "updated-today record unreadable",
+    "six-hour",
+    "refuses to run as root",
+    "XDG_RUNTIME_DIR",
+    "missed execution",
+    "unverified parent run lock",
+    "process group",
+    "planned updates only",
+    "did not run first",
+    "owner is in a manager ownership cycle",
+    "backfilled",
+    "explicit manual run",
+    "owner changed since the evidence",
+    "kernel lock",
+)
+
+
+def test_architecture_records_phase_35_mechanisms() -> None:
+    """Keep the auto-update mechanisms and accepted limits load-bearing."""
+    text = ARCHITECTURE.read_text(encoding="utf-8")
+    for phrase in _PHASE_35_REQUIRED:
+        assert phrase in text, f"missing load-bearing phrase: {phrase}"
+
+
 _PHASE_19_REQUIRED = (
     "ToolState",
     "state_of",

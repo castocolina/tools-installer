@@ -6,7 +6,7 @@
 
 ## Goal
 
-A user who opts in gets their tools updated on a schedule in a safe order — package managers first, then the tools that depend on them — with nothing updated twice a day, nothing run as root, and no tool updated after its manager failed.
+A user who opts in gets their tools updated on a schedule in a safe order — package managers first, then the tools that depend on them — with nothing updated twice a day *(amended 2026-11-22, needs confirmation: this holds per tool per day through the record, W5; the result counts planned updates only, W6)*, nothing run as root, and no tool updated after its manager failed.
 
 ## Background
 
@@ -87,12 +87,31 @@ A user who opts in gets their tools updated on a schedule in a safe order — pa
 
 - Opt-in only: a fresh install never runs `update-all`.
 - Container runs only in disposable containers (`scripts/detect-container-runtime.sh`), removed afterwards; tests use a scratch HOME and fakes; never the developer host.
-- The runner changes the host's tools only when the user opted in; plan-only mode and tests change nothing.
+- The timer changes the host's tools only when the user opted in; an explicit manual run also runs the job; plan-only mode writes no installer state (W2) and tests change nothing. *(amended 2026-11-22, needs confirmation)*
 - `make validate && make test` pass on the commit.
 
 ## Amendment of Phase 24.2
 
 *(amended 2026-11-19, 35 D-01: SCHED-01 "a schedule is on by default" gains a per-row default; `update-all` seeds off; the rule that the installer never changes a recorded user decision is unchanged. Owner-approved at the 2026-11-19 ingest gate.)* The statement amended is `24.2-SPEC.md:61`.
+
+## Amendments of 2026-11-22 (orchestrator decisions, provisional, needs confirmation)
+
+1. R2, R3, R9: dependents are judged with a second refresh pass after managers; plan mode always prints a note because it judges only the first pass.
+2. R9: --plan writes no installer state: it still reads, takes no run lock and looks versions up read-only. It uses `hold_writes()` and its cached evidence window.
+3. R10: After a real run that updated or failed something one desktop notification is attempted (counts and registry ids only; a missing adapter or a delivery failure is named in the result line and changes nothing else).
+4. R2, R4: antigravity, codex, fnm, herdr-app, kitty, opencode, volta and xcode-clt have no declared update command and are skipped by the generic rule; opencode keeps its row.
+5. R7: the record's `by` is any update schedule id; `atomic_replace_entry` writes it and the reader is strict.
+6. R6: the summary adds `; K unchanged` for results that changed nothing.
+7. R8: the dedicated `update-all` container target is orchestrator-run only; existing `schedules` pairs stay green. Its gated steps record the running-binary replacement and rc-file digests for `uv self update`; a uv installed without `UV_NO_MODIFY_PATH` and updated by a path ignoring it can rewrite shell rc files.
+8. R3: the service guard judges fresh ownership and confirmed evidence only; otherwise `latest version not confirmed`.
+9. R4: update-all refuses to run as root.
+10. R7: A tool update-all updated today is skipped by its own row that day, the per-tool rows keep their six-hour cadence otherwise, and deduplication follows the mutation (a failed update that already changed the tool, such as a smoke-check failure after `pnpm add -g`, counts) while the daily record can be read and saved; with an unreadable or unsaved record a tool can update twice in a day. The result names degraded records.
+11. R9: every plan prints a note because its evidence window and judgment differ from a real run.
+12. R4: the parent-lock flag is verified for update-all by holder line and kernel lock; failure is `unverified parent run lock`, and the lock is advisory. Every command run through the update-all runner (the primary updates, the pnpm replay and the herdr reload) runs bounded, with closed stdin, in its own process group that is ended and awaited within a hard cap on a timeout or an interruption; manager queries, version probes and the notifier are not in a command group (the queries and probes keep their own timeouts and read a closed stdin during an update-all run, and the notifier is a best-effort attempt); a descendant that starts its own session and a vendor script that calls sudo itself are accepted limits.
+13. R3: a dependent is also skipped with `did not run first` or `owner changed since the evidence`; a backfilled manager report never confirms an update. The result counts planned updates only: a pnpm self-update replays the captured global set, and an ordinary pnpm-owned update submits the peer packages of its command (an mmdc update also submits Puppeteer in the same pnpm add -g), so more packages can change than the plan counts, without being planned, guarded, recorded or logged. The Goal's once-a-day rule is per tool through the record (W5).
+14. R1: The timer is opt-in: the row is off by default and the installer never turns it on or off after the user decided; a manual setup.py --run-schedule update-all is an explicit manual run that runs the same job whether or not the row is on.
+15. R10: After a real run that updated or failed something one desktop notification is attempted (counts and registry ids only; a missing adapter or a delivery failure is named in the result line and changes nothing else).
+16. R9: --plan writes no installer state: it still reads, takes no run lock and looks versions up read-only.
 
 ## Acceptance Criteria
 
@@ -104,8 +123,8 @@ A user who opts in gets their tools updated on a schedule in a safe order — pa
 - [ ] One run-log line per tool and one shared-log summary line.
 - [ ] A tool covered by both runners is updated at most once a day.
 - [ ] The container log shows the plan, the order and the results, with the `uv self update` finding recorded.
-- [ ] Plan-only mode matches a real run's order and changes nothing.
-- [ ] One summary notification per non-empty run; none for an empty run; a notifier failure never fails the run.
+- [ ] Plan-only mode matches a real run's order on equal evidence (a note says when the evidence differs) and writes no installer state (W2). *(amended 2026-11-22, needs confirmation)*
+- [ ] One notification is attempted after a run that updated or failed something; none for a run that only skipped or changed nothing (W3); a notifier failure never fails the run. *(amended 2026-11-22, needs confirmation)*
 
 ## Edge Coverage
 
@@ -121,28 +140,28 @@ A user who opts in gets their tools updated on a schedule in a safe order — pa
 | adjacency | R2 | ✅ covered | Acceptance 2: two managers of equal standing are ordered by tool id, so the plan is deterministic |
 | empty | R2 | ✅ covered | Acceptance 2: no managers or no dependents installed gives an empty or managers-only plan, never an error |
 | ordering | R2 | ✅ covered | Acceptance 2: the order is deterministic (managers, then dependents grouped by owner, ties by tool id) and asserted by the planner test |
-| idempotency | R2 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode never changes state |
+| idempotency | R2 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode writes no installer state *(amended 2026-11-22, needs confirmation)* |
 | concurrency | R2 | 🧪 backstop | held-out test: a second run while the run lock is held returns `skipped: busy` and changes nothing |
 | adjacency | R3 | ✅ covered | Acceptance 3: a dependent owned by two managers is skipped when either failed and the line names the failed one |
 | empty | R3 | ✅ covered | Acceptance: nothing to update gives an empty plan, `ok: 0 updated`, an empty run log and no notification |
 | ordering | R3 | ✅ covered | Acceptance 2: the order is deterministic (managers, then dependents grouped by owner, ties by tool id) and asserted by the planner test |
-| idempotency | R3 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode never changes state |
+| idempotency | R3 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode writes no installer state *(amended 2026-11-22, needs confirmation)* |
 | concurrency | R3 | 🧪 backstop | held-out test: a second run while the run lock is held returns `skipped: busy` and changes nothing |
 | adjacency | R4 | ✅ covered | Acceptance: planner fixtures include tools of equal rank, ties broken by tool id (asserted in the planner test) |
 | empty | R4 | ✅ covered | Acceptance: nothing to update gives an empty plan, `ok: 0 updated`, an empty run log and no notification |
 | encoding | R4 | ✅ covered | Acceptance 4: refusal text and the child environment value `HOMEBREW_NO_SUDO=1` are compared as exact strings |
 | ordering | R4 | ✅ covered | Acceptance 2: the order is deterministic (managers, then dependents grouped by owner, ties by tool id) and asserted by the planner test |
-| idempotency | R4 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode never changes state |
+| idempotency | R4 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode writes no installer state *(amended 2026-11-22, needs confirmation)* |
 | concurrency | R4 | 🧪 backstop | held-out test: a second run while the run lock is held returns `skipped: busy` and changes nothing |
 | adjacency | R5 | ✅ covered | Acceptance: planner fixtures include tools of equal rank, ties broken by tool id (asserted in the planner test) |
 | empty | R5 | ✅ covered | Acceptance: nothing to update gives an empty plan, `ok: 0 updated`, an empty run log and no notification |
 | ordering | R5 | ✅ covered | Acceptance 2: the order is deterministic (managers, then dependents grouped by owner, ties by tool id) and asserted by the planner test |
-| idempotency | R5 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode never changes state |
+| idempotency | R5 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode writes no installer state *(amended 2026-11-22, needs confirmation)* |
 | concurrency | R5 | 🧪 backstop | held-out test: a second run while the run lock is held returns `skipped: busy` and changes nothing |
 | adjacency | R6 | ✅ covered | Acceptance: planner fixtures include tools of equal rank, ties broken by tool id (asserted in the planner test) |
 | empty | R6 | ✅ covered | Acceptance: nothing to update gives an empty plan, `ok: 0 updated`, an empty run log and no notification |
 | ordering | R6 | ✅ covered | Acceptance 2: the order is deterministic (managers, then dependents grouped by owner, ties by tool id) and asserted by the planner test |
-| idempotency | R6 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode never changes state |
+| idempotency | R6 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode writes no installer state *(amended 2026-11-22, needs confirmation)* |
 | concurrency | R6 | 🧪 backstop | held-out test: a second run while the run lock is held returns `skipped: busy` and changes nothing |
 | adjacency | R7 | ✅ covered | Acceptance 7: a tool covered by both an agent-CLI row and update-all is updated once; a tool covered by only one runs normally |
 | empty | R7 | ✅ covered | Acceptance: nothing to update gives an empty plan, `ok: 0 updated`, an empty run log and no notification |
@@ -152,17 +171,17 @@ A user who opts in gets their tools updated on a schedule in a safe order — pa
 | adjacency | R8 | ✅ covered | Acceptance: planner fixtures include tools of equal rank, ties broken by tool id (asserted in the planner test) |
 | empty | R8 | ✅ covered | Acceptance 8: a container with no installed tools runs the plan and logs an empty plan, not a failure |
 | ordering | R8 | ✅ covered | Acceptance 2: the order is deterministic (managers, then dependents grouped by owner, ties by tool id) and asserted by the planner test |
-| idempotency | R8 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode never changes state |
+| idempotency | R8 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode writes no installer state *(amended 2026-11-22, needs confirmation)* |
 | concurrency | R8 | 🧪 backstop | held-out test: a second run while the run lock is held returns `skipped: busy` and changes nothing |
 | adjacency | R9 | ✅ covered | Acceptance: planner fixtures include tools of equal rank, ties broken by tool id (asserted in the planner test) |
 | empty | R9 | ✅ covered | Acceptance: nothing to update gives an empty plan, `ok: 0 updated`, an empty run log and no notification |
 | ordering | R9 | ✅ covered | Acceptance 2: the order is deterministic (managers, then dependents grouped by owner, ties by tool id) and asserted by the planner test |
-| idempotency | R9 | ✅ covered | Acceptance 9: plan mode is read-only, so repeating it prints the same plan and changes nothing |
+| idempotency | R9 | ✅ covered | Acceptance 9: plan mode writes no installer state, so repeating it prints the same plan *(amended 2026-11-22, needs confirmation)* |
 | concurrency | R9 | 🧪 backstop | held-out test: a second run while the run lock is held returns `skipped: busy` and changes nothing |
 | adjacency | R10 | ✅ covered | Acceptance: planner fixtures include tools of equal rank, ties broken by tool id (asserted in the planner test) |
 | empty | R10 | ✅ covered | Acceptance: nothing to update gives an empty plan, `ok: 0 updated`, an empty run log and no notification |
 | ordering | R10 | ✅ covered | Acceptance 2: the order is deterministic (managers, then dependents grouped by owner, ties by tool id) and asserted by the planner test |
-| idempotency | R10 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode never changes state |
+| idempotency | R10 | ✅ covered | Acceptance 7: a second run the same day skips tools already updated; plan mode writes no installer state *(amended 2026-11-22, needs confirmation)* |
 | concurrency | R10 | 🧪 backstop | held-out test: a second run while the run lock is held returns `skipped: busy` and changes nothing |
 
 ## Prohibitions (must-NOT)

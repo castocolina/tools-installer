@@ -354,7 +354,7 @@ Plans:
 
 ### Phase 35: Opt-in auto-update, package managers first
 
-**Goal**: A user who opts in gets their tools updated on a schedule in a safe order: package managers first, then the tools that depend on them, with nothing updated twice, nothing run as root and nothing updated after its manager failed.
+**Goal**: A user who opts in gets their tools updated on a schedule in a safe order: package managers first, then the tools that depend on them, with nothing updated twice, nothing run as root and nothing updated after its manager failed. *(amended 2026-11-22, needs confirmation: nothing updated twice holds per tool per day through the record; the result counts planned updates only, W6)*
 **Depends on**: Phase 34 (reuses its notifier and outdated list)
 **Requirements**: AUTOUPD-01, AUTOUPD-02, AUTOUPD-03, AUTOUPD-04, AUTOUPD-05, AUTOUPD-06, AUTOUPD-07, AUTOUPD-08
 **Note**: Ingested 2026-11-19 from `.planning/todos/pending/2026-11-17-opt-in-auto-update-policy-managers-first.md` and research feature 2. A Schedules row, never a Policies row (PROJECT.md doctrine). **Amends 24.2 SCHED-01** (owner-approved at the ingest conflict gate, 2026-11-19): `24.2-SPEC.md:61` seeds every schedule on; this phase adds a per-row `default_on=False` and keeps the rule that the installer never changes a recorded user decision. Open owner questions: OQ-AUTOUPD-1..6 in `.planning/intel/context.md` (managers only first vs both, folding the five per-tool rows, the cask policy). Research flag: whether `uv self update` is safe while the runner runs under `uv run` (container check).
@@ -362,7 +362,7 @@ Plans:
 
   1. A fresh install seeds `update-all` off, no Policies row exists for it, and once the user turns it on the installer never turns it off or on by itself.
   2. A unit test with brew, uv and two dependents asserts the order: managers (ranked by `resolve._RANK` *(amended 2026-11-19, 35 D-05, needs confirmation: ordered by ownership edges)*), then dependents grouped by owner and ordered by `deps.resolve_dependencies`; a failing manager produces a skip line for each dependent and no update call for them.
-  3. Refused tools (native owner, SDKMAN, Volta, pins, os-package) are skipped with their refusal reason, a held run lock makes the run refuse instead of overlapping, no code path runs sudo, and brew casks are left alone on macOS by default.
+  3. Refused tools (native owner, SDKMAN, Volta, pins, os-package) are skipped with their refusal reason, a held run lock makes the run refuse instead of overlapping, no code path runs sudo, and brew casks are left alone on macOS by default. *(amended 2026-11-22, needs confirmation: Volta and seven other script tools with no declared update command are skipped as `no unattended update path`)*
   4. A run over three tools leaves one line per tool in its run log and one summary line in the shared schedule log, and a tool covered by a per-tool agent-CLI row is updated once per day.
   5. The e2e runs `--run-schedule update-all` in a disposable container, never on the host, and records the `uv self update` result.
 
