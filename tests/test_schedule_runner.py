@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from installer import legacy_guard
+from installer import daemon, legacy_guard
 from installer.helper_assets import schedule_runner
 from installer.run import CHILD_ENV
 
@@ -471,6 +471,47 @@ def test_child_env_passes_the_proxy_certificate_and_pnpm_variables(
     values = dict(line.split("=", 1) for line in seen.read_text().splitlines() if "=" in line)
     assert {key: values.get(key) for key in wanted} == wanted
     assert "SUDO_ASKPASS" not in values
+
+
+def _captured_child_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    bin_dir = tmp_path / "bin"
+    seen = tmp_path / "env.txt"
+    _script(bin_dir, "brew", f'/usr/bin/env > "{seen}"')
+    monkeypatch.setenv("PATH", str(bin_dir))
+    assert _run(tmp_path, "cache-cleanup")[0] == 0
+    return dict(line.split("=", 1) for line in seen.read_text().splitlines() if "=" in line)
+
+
+def test_child_env_passes_the_session_bus_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    address = "unix:path=/run/user/1000/bus"
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", address)
+    assert _captured_child_env(tmp_path, monkeypatch)["DBUS_SESSION_BUS_ADDRESS"] == address
+
+
+def test_child_env_leaves_an_unset_bus_address_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    assert "DBUS_SESSION_BUS_ADDRESS" not in _captured_child_env(tmp_path, monkeypatch)
+
+
+def test_child_env_never_passes_the_github_token_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for key in ("GITHUB_TOKEN", "GH_TOKEN"):
+        monkeypatch.setenv(key, "test-token")
+    values = _captured_child_env(tmp_path, monkeypatch)
+    for key in ("GITHUB_TOKEN", "GH_TOKEN"):
+        assert key not in values
+        assert key not in vars(schedule_runner)["_PASSED_ENV"]
+
+
+def test_the_bus_address_is_not_a_unit_environment_key() -> None:
+    assert "DBUS_SESSION_BUS_ADDRESS" not in daemon.ENVIRONMENT_KEYS
+    with pytest.raises(daemon.DaemonScheduleError):
+        daemon.check_environment({"PATH": "/usr/bin", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/x"})
 
 
 _UV_LOCKED = (
