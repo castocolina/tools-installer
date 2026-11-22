@@ -509,6 +509,33 @@ def test_child_env_passes_the_session_bus_address(
     assert (checkout / "bus").read_text().strip() == "unset"
 
 
+def test_the_bus_address_reaches_the_update_all_child_only_when_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    checkout = _checkout(tmp_path)
+    seen = tmp_path / "env.txt"
+    uv = _script(tmp_path / "bin", "uv", f'/usr/bin/env > "{seen}"\necho "ok: done"')
+    monkeypatch.setenv("PATH", str(uv.parent))
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/dummy/bus")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    def values() -> dict[str, str]:
+        return dict(line.split("=", 1) for line in seen.read_text().splitlines() if "=" in line)
+
+    assert _run(tmp_path, "update-all", "--installer", str(checkout), "--uv", str(uv))[0] == 0
+    assert values().get("DBUS_SESSION_BUS_ADDRESS") == "unix:path=/dummy/bus"
+    assert "XDG_RUNTIME_DIR" not in values()
+    assert _update(tmp_path, uv, checkout)[0] == 0
+    assert "DBUS_SESSION_BUS_ADDRESS" not in values()
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS")
+    assert _run(tmp_path, "update-all", "--installer", str(checkout), "--uv", str(uv))[0] == 0
+    assert "DBUS_SESSION_BUS_ADDRESS" not in values()
+    assert "XDG_RUNTIME_DIR" not in values()
+    assert "DBUS_SESSION_BUS_ADDRESS" not in vars(schedule_runner)["_PASSED_ENV"]
+    assert "DBUS_SESSION_BUS_ADDRESS" not in daemon.ENVIRONMENT_KEYS
+
+
 def test_child_env_leaves_an_unset_bus_address_unset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

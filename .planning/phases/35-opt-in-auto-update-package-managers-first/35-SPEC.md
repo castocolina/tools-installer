@@ -64,7 +64,7 @@ A user who opts in gets their tools updated on a schedule in a safe order — pa
    - Target: a plan output from the same planner the real run uses.
    - Acceptance: the plan output equals the order and skip reasons of a real run on the same fixture; a spy on the update executor shows zero calls in plan mode.
 
-10. **Notification after a run (added by the interview)**: After an `update-all` run that updated or skipped anything, one desktop notification summarizes the result through the phase 34 notifier.
+10. **Notification after a run (added by the interview)**: After an `update-all` run that updated or failed anything, one desktop notification is attempted (counts and registry ids only; a missing adapter or a delivery failure is named in the result line and changes nothing else) through the phase 34 notifier. *(amended 2026-11-22, 35 orchestrator decision 3, needs confirmation: a run that only skipped, only found tools unchanged or had nothing to do sends nothing, because persistent refusals (an SDKMAN tool, a script with no update path) would notify every night; the body lists counts and registry ids only)*
     - Current: n/a.
     - Target: the notifier is called once with counts.
     - Acceptance: a run that updated two tools and skipped one sends one notification with those counts (fake notifier); a run with nothing to do sends none; a notifier failure logs `notify skipped` and the run still exits ok.
