@@ -2491,11 +2491,82 @@ schedules_fetch_log() {
   schedules_tester "cat \"\$HOME/${SCHEDULES_LOG_REL}\" 2>/dev/null || true"
 }
 
+# Count only this id, distinguishing a missing log from an unreadable one.
+schedules_id_count() {
+  local log
+  if ! log="$(schedules_tester "if [ -e \"\$HOME/${SCHEDULES_LOG_REL}\" ]; then cat \"\$HOME/${SCHEDULES_LOG_REL}\"; fi")"; then
+    printf 'TRACER_SCHEDULE_BASELINE_FAILED id=%s\n' "$1"
+    return 1
+  fi
+  printf '%s\n' "$log" | awk -v id="$1" '$2 == id { n++ } END { print n+0 }'
+}
+
+schedules_result_stamp() {
+  awk -v id="$2" '$2 == id { stamp=$1 } END { print stamp }' "$1"
+}
+
+schedules_expected_cell() {
+  local glyph=$'\xe2\x9c\x93'
+  awk -v stamp="$1" -v today="$2" -v glyph="$glyph" '
+    function days(s, y,m,d,era,yoe,doy) {
+      y=substr(s,1,4)+0; m=substr(s,6,2)+0; d=substr(s,9,2)+0
+      y -= (m <= 2); era=int(y/400); yoe=y-era*400
+      m += (m > 2 ? -3 : 9); doy=int((153*m+2)/5)+d-1
+      return era*146097+yoe*365+int(yoe/4)-int(yoe/100)+doy
+    }
+    BEGIN { n=days(today)-days(stamp); print glyph " " (n > 0 ? n "d" : substr(stamp,12,5)) }
+  '
+}
+
+schedules_mark_checkout() {
+  if ! schedules_tester "touch \"\$HOME/.checkout-mark\""; then
+    printf 'TRACER_SCHEDULE_CHECKOUT_PROBE_FAILED\n'
+    return 1
+  fi
+}
+
+schedules_checkout_verdict() {
+  local out
+  if ! out="$(schedules_tester "find \"${TESTER_WORKSPACE}\" -newer \"\$HOME/.checkout-mark\" ! -type d ! -path '*/.venv/*' ! -path '*/.git/*'")"; then
+    printf 'TRACER_SCHEDULE_CHECKOUT_PROBE_FAILED\n'
+    return 1
+  fi
+  if [[ -n "$out" ]]; then
+    printf 'TRACER_SCHEDULE_CHECKOUT_TOUCHED id=%s path=%s\n' "$1" "${out%%$'\n'*}"
+    return 1
+  fi
+  printf 'TRACER_SCHEDULE_CHECKOUT_UNCHANGED id=%s\n' "$1"
+}
+
 # $1 is a copy of schedules.log, $2 a schedule id: that id's newest run must hold a start line and
 # a result line after it (ok, skipped or failed). A `skipped: busy` line is a run of its own and
 # never counts as the result of an earlier start.
 schedules_run_verdict() {
-  local result
+  local result new starts line text pattern='^ok: [0-9]+ updates available($|; )'
+  if [[ $# -ge 3 ]]; then
+    result="$(awk -v id="$2" -v before="$3" '$2 == id { n++; if (n > before) print }' "$1")"
+    new="$(printf '%s\n' "$result" | awk 'NF { n++ } END { print n+0 }')"
+    starts="$(printf '%s\n' "$result" | awk '$3 == "start" { n++ } END { print n+0 }')"
+    if [[ "$new" -eq 0 ]]; then
+      printf 'TRACER_SCHEDULE_RUN_STALE id=%s new=0\n' "$2"; return 1
+    fi
+    if [[ "$starts" -ge 2 ]]; then
+      printf 'TRACER_SCHEDULE_RUN_AMBIGUOUS id=%s starts=%s\n' "$2" "$starts"; return 1
+    fi
+    line="${result##*$'\n'}"
+    if ! printf '%s\n' "$result" | awk 'NR==1 && $3=="waited:" { next } !seen { if ($3 != "start") exit 1; seen=1; next } { if (done || $3 !~ /^(ok|failed|skipped):$/) exit 1; done=1 } END { if (!seen || !done) exit 1 }'; then
+      printf 'TRACER_SCHEDULE_RUN_UNEXPECTED id=%s new=%s line=%s\n' "$2" "$new" "$line"; return 1
+    fi
+    text="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; sub(/^  /, ""); print }')"
+    if [[ "$text" == failed:* ]]; then
+      printf 'TRACER_SCHEDULE_RUN_FAILED id=%s line=%s\n' "$2" "$line"; return 1
+    fi
+    if [[ ! "$text" =~ $pattern ]]; then
+      printf 'TRACER_SCHEDULE_RUN_UNEXPECTED id=%s want=ok line=%s\n' "$2" "$line"; return 1
+    fi
+    printf 'TRACER_SCHEDULE_RUN_OK id=%s result=ok\nTRACER_SCHEDULE_RESULT id=%s text=%s\n' "$2" "$2" "$text"
+    return 0
+  fi
   result="$(awk -v id="$2" '
     $2 == id && $3 == "start" { started = 1; result = ""; line = ""; next }
     $2 == id && started && $3 ~ /^(ok|skipped|failed):$/ {
@@ -2526,19 +2597,30 @@ schedules_cell_verdict() {
     printf 'TRACER_SCHEDULE_CELL_NEVER id=%s\n' "$2"
     return 1
   fi
+  if [[ $# -ge 3 && "$cell" != "$3" ]]; then
+    printf 'TRACER_SCHEDULE_CELL_MISMATCH id=%s cell=%s\n' "$2" "$cell"
+    return 1
+  fi
   printf 'TRACER_SCHEDULE_CELL_OK id=%s cell=%s\n' "$2" "$cell"
 }
 
 # The log and cell verdicts of schedule $1 after a run.
 schedules_verdicts() {
-  local log cells out rc=0
+  local log cells out today stamp expected rc=0
   log="$(mktemp)"
   cells="$(mktemp)"
   schedules_fetch_log >"$log" || rc=1
-  out="$(schedules_run_verdict "$log" "$1")" || rc=1
+  out="$(schedules_run_verdict "$log" "$@")" || rc=1
   printf '%s\n' "$out"
   schedules_driver cells >"$cells" || rc=1
-  out="$(schedules_cell_verdict "$cells" "$1")" || rc=1
+  if [[ $# -ge 2 ]]; then
+    today="$(schedules_tester 'date +%F')" || rc=1
+    stamp="$(schedules_result_stamp "$log" "$1")"
+    expected="$(schedules_expected_cell "$stamp" "$today")"
+    out="$(schedules_cell_verdict "$cells" "$1" "$expected")" || rc=1
+  else
+    out="$(schedules_cell_verdict "$cells" "$1")" || rc=1
+  fi
   printf '%s\n' "$out"
   rm -f "$log" "$cells"
   return "$rc"
@@ -2552,11 +2634,19 @@ schedules_journal() {
 
 # Runs schedule $1 once through its installed unit $2: the service, the way its timer starts it.
 schedules_run_one() {
-  schedules_tester "systemctl --user start $2.service" || true # the log and the cell are the verdict
-  if ! schedules_verdicts "$1"; then
-    schedules_journal "$2.service"
-    return 1
+  local launch=0 rc=0
+  schedules_tester "systemctl --user start $2.service" || launch=$?
+  if [[ $# -ge 3 ]]; then
+    schedules_verdicts "$1" "$3" || rc=1
+    if [[ "$launch" -ne 0 ]]; then
+      printf 'TRACER_SCHEDULE_LAUNCH_FAILED id=%s status=%s\n' "$1" "$launch"
+      rc=1
+    fi
+  else
+    schedules_verdicts "$1" || rc=1
   fi
+  if [[ "$rc" -ne 0 ]]; then schedules_journal "$2.service"; fi
+  return "$rc"
 }
 
 # A stub `claude` makes the claude update row available.
@@ -2568,17 +2658,25 @@ schedules_plant_claude() {
 # Every available built-in once: tmp cleanup, cache cleanup and the claude update (its run may
 # read `ok` or `skipped` when no owner is known, F9).
 schedules_run_all() {
-  local pair id rc=0
+  local pair id before rc=0
   schedules_plant_claude || return 1
   for pair in tmp-cleanup:tools-installer-prune-tmp \
     cache-cleanup:tools-installer-schedule-cache-cleanup \
-    update-claude:tools-installer-schedule-update-claude; do
+    update-claude:tools-installer-schedule-update-claude \
+    check-updates:tools-installer-schedule-check-updates; do
     id="${pair%%:*}"
     schedules_driver on "$id" || {
       rc=1
       continue
     }
-    schedules_run_one "$id" "${pair#*:}" || rc=1
+    if [[ "$id" == check-updates ]]; then
+      if ! before="$(schedules_id_count "$id")"; then printf '%s\n' "$before"; rc=1; continue; fi
+      schedules_mark_checkout || { rc=1; continue; }
+      schedules_run_one "$id" "${pair#*:}" "$before" || rc=1
+      schedules_checkout_verdict "$id" || rc=1
+    else
+      schedules_run_one "$id" "${pair#*:}" || rc=1
+    fi
   done
   return "$rc"
 }
@@ -2704,7 +2802,7 @@ schedules_teardown() {
 schedules_off_check() {
   local id out line left=0 done=0
   schedules_tester "rm -rf \"\$HOME/.config/systemd/user/tools-installer-schedule-cache-cleanup.timer.d\"" || true
-  for id in tmp-cleanup cache-cleanup update-claude; do
+  for id in tmp-cleanup cache-cleanup update-claude check-updates; do
     schedules_driver off "$id" || left=1
   done
   # shellcheck disable=SC2016 # $HOME and $f expand in the tester's shell
@@ -2745,7 +2843,7 @@ chmod 0755 "$d/runner.py" "$d"/*.sh "$d/lib/prune-tmp-common.sh"'
 }
 
 schedules_direct() {
-  local out id cmd line rc=0
+  local out id cmd line before launch rc=0
   local -a argv
   ct rm -f "$SCHEDULES_CONTAINER_NAME" >/dev/null 2>&1 || true
   if ! out="$(ct run -d --name "$SCHEDULES_CONTAINER_NAME" "$IMAGE_FEDORA" sleep infinity 2>&1)"; then
@@ -2761,12 +2859,28 @@ schedules_direct() {
   sync_workspace
   schedules_install_assets
   schedules_plant_claude
-  for id in tmp-cleanup cache-cleanup update-claude; do
+  for id in tmp-cleanup cache-cleanup update-claude check-updates; do
+    if ! out="$(schedules_driver argv "$id")" || [[ -z "$out" ]]; then
+      printf 'TRACER_SCHEDULE_ARGV_FAILED id=%s\n' "$id"; rc=1; continue
+    fi
     argv=()
-    while IFS= read -r line; do argv+=("$line"); done < <(schedules_driver argv "$id")
+    while IFS= read -r line; do argv+=("$line"); done <<<"$out"
+    if [[ "$id" == check-updates ]]; then
+      if ! before="$(schedules_id_count "$id")"; then printf '%s\n' "$before"; rc=1; continue; fi
+      schedules_mark_checkout || { rc=1; continue; }
+    fi
     printf -v cmd '%q ' ${argv[@]+"${argv[@]}"}
-    schedules_tester "${cmd% }" || true # the log and the cell are the verdict
-    schedules_verdicts "$id" || rc=1
+    launch=0
+    schedules_tester "${cmd% }" || launch=$?
+    if [[ "$id" == check-updates ]]; then
+      schedules_verdicts "$id" "$before" || rc=1
+      if [[ "$launch" -ne 0 ]]; then
+        printf 'TRACER_SCHEDULE_LAUNCH_FAILED id=%s status=%s\n' "$id" "$launch"; rc=1
+      fi
+      schedules_checkout_verdict "$id" || rc=1
+    else
+      schedules_verdicts "$id" || rc=1
+    fi
   done
   printf 'SCHEDULES_GAP=no-systemd units,calendar,catch-up not exercised\n'
   if [[ "$rc" -eq 0 ]]; then

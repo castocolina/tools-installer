@@ -442,10 +442,18 @@ def test_the_container_is_never_privileged() -> None:
 # --- Task 2: every built-in, busy, calendar, catch-up and the stamp --------------------------
 
 _TIMER_BASENAME = "tools-installer-schedule-cache-cleanup"
+_HELPERS = (
+    "schedules_id_count",
+    "schedules_result_stamp",
+    "schedules_expected_cell",
+    "schedules_mark_checkout",
+    "schedules_checkout_verdict",
+)
 _BUILTINS = (
     ("tmp-cleanup", "tools-installer-prune-tmp"),
     ("cache-cleanup", _TIMER_BASENAME),
     ("update-claude", "tools-installer-schedule-update-claude"),
+    ("check-updates", "tools-installer-schedule-check-updates"),
 )
 
 # Stubs of the tester seams: every command is recorded on one line, the schedules.log copy comes
@@ -456,6 +464,12 @@ schedules_tester() {
   printf 'tester %s\n' "${1//$'\n'/ ; }" >> "$CALLS"
   case "$1" in
     "date +%H:%M") echo "$CLOCK" ;;
+    "date +%F") echo 2026-11-13 ;;
+    *"schedules.log"*) cat "$SCRATCH/log" ;;
+    "systemctl --user start "*".service")
+      unit=${1##* }
+      [ ! -f "$SCRATCH/launch.$unit" ] || cat "$SCRATCH/launch.$unit" >> "$SCRATCH/log"
+      return "${LAUNCH_RC:-0}" ;;
     *"journalctl --user"*) printf 'journal line one\njournal line two\n' ;;
     *"test -e"*) [ "${STAMP:-1}" = 1 ]; return ;;
     *"stat -c"*) head -n 1 "$SCRATCH/mtimes"
@@ -503,7 +517,12 @@ def test_each_builtin_runs_once(tmp_path: Path, claude_result: str) -> None:
     scratch = tmp_path / "home"
     cells = "".join(f"CELL {schedule_id} ✓ 10:00\n" for schedule_id, _unit in _BUILTINS)
     _seed(scratch, log=_builtin_log(claude_result), cells=cells)
+    (scratch / "launch.tools-installer-schedule-check-updates.service").write_text(
+        "2026-11-13T10:00:00+00:00 check-updates start\n"
+        "2026-11-13T10:00:00+00:00 check-updates ok: 0 updates available\n"
+    )
     script = _script(
+        *_HELPERS,
         "schedules_journal",
         "schedules_verdicts",
         "schedules_run_verdict",
@@ -526,6 +545,8 @@ def test_each_builtin_runs_once(tmp_path: Path, claude_result: str) -> None:
     for schedule_id, _unit in _BUILTINS:
         assert f"TRACER_SCHEDULE_CELL_OK id={schedule_id} cell=✓ 10:00" in result.stdout
     assert "TRACER_SCHEDULE_RUN_OK id=update-claude result=" + word in result.stdout
+    assert "TRACER_SCHEDULE_RESULT id=check-updates text=ok: 0 updates available" in result.stdout
+    assert "TRACER_SCHEDULE_CHECKOUT_UNCHANGED id=check-updates" in result.stdout
 
 
 def test_a_failing_run_prints_the_unit_journal(tmp_path: Path) -> None:
@@ -685,7 +706,7 @@ def test_stamp_observation(tmp_path: Path, mtimes: str, kept: str) -> None:
 
 # --- Task 3: off, teardown on every outcome and the direct-runner fallback --------------------
 
-_IDS = ("tmp-cleanup", "cache-cleanup", "update-claude")
+_IDS = ("tmp-cleanup", "cache-cleanup", "update-claude", "check-updates")
 
 
 @pytest.mark.parametrize(
@@ -789,7 +810,8 @@ schedules_driver() {
   printf 'driver %s\n' "$*" >> "$CALLS"
   if [ "$1" = argv ]; then printf '/u/uv\nrun\n--script\nrunner.py\n%s\n' "$2"; fi
 }
-schedules_verdicts() { printf 'verdicts %s\n' "$1"; return "${VERDICT_RC:-0}"; }
+schedules_verdicts() { printf 'verdicts %s\n' "$*"; return "${VERDICT_RC:-0}"; }
+schedules_fetch_log() { :; }
 """
 
 
@@ -797,6 +819,7 @@ schedules_verdicts() { printf 'verdicts %s\n' "$1"; return "${VERDICT_RC:-0}"; }
 def test_direct_fallback(tmp_path: Path, verdict_rc: str) -> None:
     scratch = tmp_path / "home"
     script = _script(
+        *_HELPERS,
         "schedules_infeasible",
         "schedules_create_tester",
         "schedules_plant_claude",
@@ -829,3 +852,291 @@ def test_direct_fallback(tmp_path: Path, verdict_rc: str) -> None:
     assert gap in result.stdout
     assert ("TRACER_SCHEDULES_DIRECT_OK" in result.stdout) is (verdict_rc == "0")
     assert result.stdout.splitlines()[-1] == "TRACER_SCHEDULES_TEARDOWN_OK"
+
+
+def test_every_schedule_loop_names_the_update_check() -> None:
+    for name in ("schedules_run_all", "schedules_off_check", "schedules_direct"):
+        assert "check-updates" in _function(name)
+    assert "check-updates:tools-installer-schedule-check-updates" in _function("schedules_run_all")
+
+
+def test_every_schedules_helper_a_function_calls_is_extracted() -> None:
+    extracted = set(_HELPERS) | {
+        "schedules_run_all",
+        "schedules_run_one",
+        "schedules_verdicts",
+        "schedules_direct",
+        "schedules_run_verdict",
+        "schedules_cell_verdict",
+        "schedules_plant_claude",
+        "schedules_infeasible",
+        "schedules_create_tester",
+        "schedules_install_assets",
+        "schedules_tester",
+        "schedules_driver",
+        "schedules_fetch_log",
+        "schedules_journal",
+    }
+    for name in (
+        "schedules_run_all",
+        "schedules_run_one",
+        "schedules_verdicts",
+        "schedules_direct",
+    ):
+        calls = set(re.findall(r"\b(schedules_[a-z_]+)\b", _function(name)))
+        assert calls <= extracted
+
+
+@pytest.mark.parametrize(
+    ("lines", "expected", "code"),
+    [
+        ([], "STALE", 1),
+        (["skipped: busy"], "UNEXPECTED", 1),
+        (["start"], "UNEXPECTED", 1),
+        (["start", "ok: 3 updates available"], "OK", 0),
+        (["waited: 2s for check-updates", "start", "ok: 3 updates available"], "OK", 0),
+        (["start", "ok: 3 updates available", "start", "ok: 3 updates available"], "AMBIGUOUS", 1),
+        (["start", "start", "ok: 3 updates available"], "AMBIGUOUS", 1),
+        (["start", "skipped: x"], "UNEXPECTED", 1),
+        (["start", "ok: done"], "UNEXPECTED", 1),
+        (["start", "failed: boom"], "FAILED", 1),
+    ],
+)
+def test_strict_new_activation(tmp_path: Path, lines: list[str], expected: str, code: int) -> None:
+    log = _log(
+        tmp_path,
+        "check-updates start",
+        "check-updates ok: 3 updates available",
+        *[f"check-updates {line}" for line in lines],
+    )
+    result = _run(
+        _script("schedules_run_verdict") + f"\nschedules_run_verdict {log} check-updates 2\n",
+        tmp_path / "home",
+    )
+    assert result.returncode == code, result.stdout + result.stderr
+    assert f"TRACER_SCHEDULE_RUN_{expected} id=check-updates" in result.stdout
+    assert "TRACER_SCHEDULE_RUN_MISSING" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("stamp", "today", "want"),
+    [
+        ("2026-11-13", "2026-11-13", "10:05"),
+        ("2026-11-13", "2026-11-14", "1d"),
+        ("2026-11-13", "2026-11-15", "2d"),
+        ("2026-02-28", "2026-03-01", "1d"),
+        ("2028-02-29", "2028-03-01", "1d"),
+        ("2026-12-31", "2027-01-01", "1d"),
+        ("2026-11-13", "2026-11-12", "10:05"),
+    ],
+)
+def test_the_cell_follows_the_drivers_clock_rule(
+    tmp_path: Path, stamp: str, today: str, want: str
+) -> None:
+    result = _run(
+        _script("schedules_expected_cell")
+        + f"\nschedules_expected_cell {stamp}T10:05:00+00:00 {today}\n",
+        tmp_path / "home",
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"✓ {want}"
+
+
+@pytest.mark.parametrize("cell", ["✓ 09:59", "– 10:05", "! 10:05", "running", "never", "✓ 10:05"])
+def test_strict_cell(tmp_path: Path, cell: str) -> None:
+    cells = tmp_path / "cells"
+    cells.write_text(f"CELL check-updates {cell}\n", encoding="utf-8")
+    result = _run(
+        _script("schedules_cell_verdict")
+        + f"\nschedules_cell_verdict {cells} check-updates '✓ 10:05'\n",
+        tmp_path / "home",
+    )
+    assert result.returncode == (0 if cell == "✓ 10:05" else 1)
+    assert (
+        "CELL_NEVER" if cell == "never" else "CELL_OK" if cell == "✓ 10:05" else "CELL_MISMATCH"
+    ) in result.stdout
+
+
+def test_the_driver_prints_the_runner_command_of_the_check_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ctx = _context(tmp_path, monkeypatch)
+    assert driver.main(["argv", "check-updates"]) == 0
+    argv = capsys.readouterr().out.splitlines()
+    assert argv == schedules.runner_argv(
+        ctx, schedules.schedule_by_id("check-updates"), tmp_path / "bin" / "uv"
+    )
+    assert argv.index("check-updates") < argv.index("--installer") < argv.index("--uv")
+
+
+def test_a_stale_success_cannot_certify_the_check_launch(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    _seed(
+        scratch,
+        log=_builtin_log("ok: x")
+        + "2026-11-12T10:00:00+00:00 check-updates start\n"
+        + "2026-11-12T10:00:00+00:00 check-updates ok: 3 updates available\n",
+        cells="CELL check-updates ✓ 10:00\n",
+    )
+    script = _script(
+        *_HELPERS,
+        "schedules_journal",
+        "schedules_verdicts",
+        "schedules_run_verdict",
+        "schedules_cell_verdict",
+        "schedules_run_one",
+        stubs=_TESTER_STUBS,
+    )
+    result = _run(script + "\nschedules_run_one check-updates check-unit 2\n", scratch)
+    assert result.returncode == 1
+    assert "TRACER_SCHEDULE_RUN_STALE id=check-updates new=0" in result.stdout
+    assert "SCHEDULE_JOURNAL check-unit.service" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("output", "status", "expected"),
+    [
+        ("", 0, "UNCHANGED"),
+        ("workspace/installer/__pycache__/x.pyc", 0, "TOUCHED"),
+        ("", 1, "PROBE_FAILED"),
+    ],
+)
+def test_the_checkout_probe(tmp_path: Path, output: str, status: int, expected: str) -> None:
+    stubs = f"""schedules_tester() {{
+  printf '%s\\n' "$1" >> "$CALLS"
+  case "$1" in find*) printf '%s' {shlex.quote(output)}; return {status} ;; esac
+}}"""
+    result = _run(
+        _script("schedules_mark_checkout", "schedules_checkout_verdict", stubs=stubs)
+        + "\nschedules_mark_checkout && schedules_checkout_verdict check-updates\n",
+        tmp_path / "home",
+    )
+    assert result.returncode == (0 if expected == "UNCHANGED" else 1)
+    assert f"TRACER_SCHEDULE_CHECKOUT_{expected}" in result.stdout
+    calls = _calls(tmp_path / "home")
+    assert "touch" in calls[0]
+    assert all(word in calls[1] for word in ("-newer", "! -type d", ".venv", ".git"))
+    if output:
+        assert f"path={output}" in result.stdout
+
+
+def test_a_baseline_read_error_fails_closed(tmp_path: Path) -> None:
+    result = _run(
+        _script("schedules_id_count", stubs="schedules_tester() { return 1; }")
+        + "\nschedules_id_count check-updates\n",
+        tmp_path / "home",
+    )
+    assert result.returncode == 1
+    assert "TRACER_SCHEDULE_BASELINE_FAILED id=check-updates" in result.stdout
+    result = _run(
+        _script("schedules_id_count", stubs="schedules_tester() { :; }")
+        + "\nschedules_id_count check-updates\n",
+        tmp_path / "empty",
+    )
+    assert result.returncode == 0 and result.stdout.strip() == "0"
+
+
+def test_a_failed_launch_status_fails_the_check_row(tmp_path: Path) -> None:
+    scratch = tmp_path / "home"
+    _seed(
+        scratch,
+        log=_builtin_log("ok: done"),
+        cells="CELL check-updates ✓ 10:00\nCELL update-claude ✓ 10:00\n",
+    )
+    (scratch / "launch.check-unit.service").write_text(
+        "2026-11-13T10:00:00+00:00 check-updates start\n"
+        "2026-11-13T10:00:00+00:00 check-updates ok: 3 updates available\n"
+    )
+    script = _script(
+        *_HELPERS,
+        "schedules_journal",
+        "schedules_verdicts",
+        "schedules_run_verdict",
+        "schedules_cell_verdict",
+        "schedules_run_one",
+        variables={"LAUNCH_RC": "3"},
+        stubs=_TESTER_STUBS,
+    )
+    result = _run(script + "\nschedules_run_one check-updates check-unit 0\n", scratch)
+    assert result.returncode == 1
+    assert "TRACER_SCHEDULE_LAUNCH_FAILED id=check-updates status=3" in result.stdout
+    result = _run(script + "\nschedules_run_one update-claude other\n", scratch)
+    assert result.returncode == 0
+
+
+def test_the_direct_route_applies_the_strict_check_verdict(tmp_path: Path) -> None:
+    script = _script(
+        *_HELPERS,
+        "schedules_infeasible",
+        "schedules_create_tester",
+        "schedules_plant_claude",
+        "schedules_install_assets",
+        "schedules_direct",
+        "schedules_teardown",
+        "cmd_schedules",
+        variables={"REPO_ROOT": "/repo"},
+        stubs=_STUBS
+        + _DIRECT_STUBS
+        + """
+schedules_tester() { case "$1" in *schedules.log*)
+  printf '2026-11-13 check-updates start\\n2026-11-13 check-updates ok: old\\n' ;; esac; }
+""",
+    )
+    result = _run(script + "\ncmd_schedules --direct\n", tmp_path / "home")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "verdicts check-updates 2" in result.stdout
+    for name in ("tmp-cleanup", "cache-cleanup", "update-claude"):
+        assert f"verdicts {name}\n" in result.stdout
+    assert "SCHEDULES_GAP=no-systemd units,calendar,catch-up not exercised" in result.stdout
+    assert result.stdout.splitlines()[-1] == "TRACER_SCHEDULES_TEARDOWN_OK"
+
+
+@pytest.mark.parametrize("mode", ["failed", "empty", "baseline", "launch"])
+def test_direct_failures_stop_or_fail_the_check(tmp_path: Path, mode: str) -> None:
+    stubs = (
+        _STUBS
+        + _DIRECT_STUBS
+        + r"""
+schedules_driver() {
+  printf 'driver %s\n' "$*" >> "$CALLS"
+  if [ "$1" = argv ] && [ "$2" = check-updates ]; then
+    [ "$MODE" != failed ] || return 1
+    [ "$MODE" != empty ] || return 0
+  fi
+  if [ "$1" = argv ]; then printf '/u/uv\nrun\n--script\nrunner.py\n%s\n' "$2"; fi
+}
+schedules_tester() {
+  printf 'tester %s\n' "$1" >> "$CALLS"
+  case "$1" in
+    *schedules.log*) [ "$MODE" != baseline ] || return 1 ;;
+    *runner.py*check-updates*) [ "$MODE" != launch ] || return 3 ;;
+  esac
+}
+"""
+    )
+    script = _script(
+        *_HELPERS,
+        "schedules_infeasible",
+        "schedules_create_tester",
+        "schedules_plant_claude",
+        "schedules_install_assets",
+        "schedules_direct",
+        variables={"MODE": mode},
+        stubs=stubs,
+    )
+    result = _run(script + "\nschedules_direct\n", tmp_path / "home")
+    assert result.returncode == 1
+    expected = (
+        "ARGV_FAILED"
+        if mode in ("failed", "empty")
+        else "BASELINE_FAILED"
+        if mode == "baseline"
+        else "LAUNCH_FAILED"
+    )
+    assert f"TRACER_SCHEDULE_{expected} id=check-updates" in result.stdout
+    calls = _calls(tmp_path / "home")
+    assert "driver argv update-claude" in calls
+    if mode != "launch":
+        assert not any(
+            "tester /u/uv run --script runner.py check-updates" in call for call in calls
+        )
