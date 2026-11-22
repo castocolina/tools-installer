@@ -2,16 +2,19 @@
 
 import json
 import os
+import sys
 import traceback
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch as mock_patch
 
 import setup
-from installer import schedules
+from installer import schedules, update_all
 from installer.model import Tool
 from installer.platform import Platform
-from installer.schedule_run import RunDeps
-from installer.update import UpdateOutcome
+from installer.run import CommandError
+from installer.schedule_run import RunDeps, update_all_runner
+from installer.update import UpdateOutcome, UpdateTarget
 from tests.update_all_doubles import (
     ScriptedProbe,
     SequenceRefresher,
@@ -55,6 +58,60 @@ def main(config_path: str, argv: list[str]) -> int:
 
         patch(setup, "_build_services", services)
         scenario = config.get("scenario", "empty")
+        if scenario == "hang":
+            now = datetime.now(UTC)
+            tool = catalog_tool("brew")
+            states = {tool.id: state(tool, "installer")}
+            pid_dir = Path(config["pid_dir"])
+            update_all.KILL_GRACE = config["kill_grace"]
+
+            class HangingService(SpyService):
+                def run(self, target: UpdateTarget) -> UpdateOutcome:
+                    script = """import os, signal, subprocess, sys, time
+from pathlib import Path
+p = Path(sys.argv[1])
+if sys.argv[2] == '1': signal.signal(signal.SIGTERM, signal.SIG_IGN)
+for name, session in [('group', False), ('escaped', True)]:
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],
+        start_new_session=session, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    (p / name).write_text(str(child.pid))
+(p / 'command').write_text(str(os.getpid()))
+while True: time.sleep(1)
+"""
+                    try:
+                        update_all_runner(
+                            [
+                                sys.executable,
+                                "-c",
+                                script,
+                                str(pid_dir),
+                                str(int(config["ignore_term"])),
+                            ],
+                            timeout=config["hang_timeout"],
+                        )
+                    except CommandError:
+                        return UpdateOutcome(
+                            target.tool.id, "failed", target.ownership.owner, "timeout"
+                        )
+                    raise AssertionError("command unexpectedly ended")
+
+            ctx = schedules.context_for(
+                "fedora", checkout=Path(config["checkout"]), read_models=lambda _a: None
+            )
+            deps = run_deps(
+                [tool],
+                ctx,
+                service=HangingService(),
+                owners={tool.id: states[tool.id].ownership},
+                refresh=SequenceRefresher(home / "versions", [states], clock=lambda: now),
+                now=lambda: now,
+                probe=ScriptedProbe({tool.id: ["1"]}),
+            )
+
+            def hang_deps(*_a: object, **_k: object) -> RunDeps:
+                return deps
+
+            patch(setup, "_schedule_run_deps", hang_deps)
         if scenario in ("three", "failing"):
             now = datetime.now(UTC)
             brew, uv, ruff = (catalog_tool(name) for name in ("brew", "uv", "ruff"))
@@ -83,11 +140,12 @@ def main(config_path: str, argv: list[str]) -> int:
                 probe=ScriptedProbe({name: ["1", "2"] for name in states}),
             )
 
-            def build_deps(_tools: list[Tool], _platform: Platform) -> RunDeps:
+            def build_deps(_tools: list[Tool], _platform: Platform, **_kwargs: object) -> RunDeps:
                 return deps
 
             patch(setup, "_schedule_run_deps", build_deps)
-        code = setup.main(argv)
+        with mock_patch.object(os, "geteuid", return_value=1000):
+            code = setup.main(argv)
         ctx = schedules.context_for(
             "fedora", checkout=Path(config["checkout"]), read_models=lambda _a: None
         )

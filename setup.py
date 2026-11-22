@@ -73,12 +73,13 @@ from installer.prompt import CallbackPrompter
 from installer.receipts import scan_retired
 from installer.render import render_troubleshooting
 from installer.run import (
+    Runner,
     apply_child_env,
     run_captured,
     run_captured_in_group,
     run_git_isolated,
 )
-from installer.schedule_run import RunDeps, run_schedule
+from installer.schedule_run import RunDeps, run_schedule, update_all_runner, update_all_stdin_closed
 from installer.schedules import SCHEDULE_DEFAULT_WAIT_SECONDS, ScheduleDefaultWarnings
 from installer.session import exit_code, ran_anything
 from installer.settings import (
@@ -528,11 +529,10 @@ def _verify_and_clean(
     clean_rc_duplicates(_RC_PATHS, managed, os.environ, console, confirm=confirm)
 
 
-def _schedule_run_deps(tools: list[Tool], platform: Platform) -> RunDeps:
-    # The in-group runner keeps the vendor update in the group the schedule runner kills.
-    version_refresh, updates, _policy, _install = _build_services(
-        tools, platform, runner=run_captured_in_group
-    )
+def _schedule_run_deps(
+    tools: list[Tool], platform: Platform, *, runner: Runner = run_captured_in_group
+) -> RunDeps:
+    version_refresh, updates, _policy, _install = _build_services(tools, platform, runner=runner)
     return RunDeps(
         tools=tools,
         updates=updates,
@@ -551,20 +551,27 @@ def _schedule_run_deps(tools: list[Tool], platform: Platform) -> RunDeps:
 
 def _run_schedule(options: Options) -> int:
     """The headless timer route: no TTY, no repairs, exactly one plain result line."""
-    tools = load_tools(_REGISTRY)
-    platform = detect()
-    store, _needs_choice = _settings_store(options.link_mode)
-    # Post-install steps run as after a manual update (SPEC R6).
-    post_install.use_shell_init_sourcing(lambda: _split_sourced_from(store.link_mode))
-    post_install.use_git_runner(run_git_isolated)
-    line, code = run_schedule(
-        options.run_schedule or "",
-        _schedule_run_deps(tools, platform),
-        parent_holds_lock=options.parent_holds_run_lock,
-        lock_holder_pid=options.lock_holder_pid,
-    )
-    print(line)
-    return code
+    with (
+        update_all_stdin_closed()
+        if options.run_schedule == "update-all"
+        else contextlib.nullcontext()
+    ):
+        tools = load_tools(_REGISTRY)
+        platform = detect()
+        store, _needs_choice = _settings_store(options.link_mode)
+        # Post-install steps run as after a manual update (SPEC R6).
+        post_install.use_shell_init_sourcing(lambda: _split_sourced_from(store.link_mode))
+        post_install.use_git_runner(run_git_isolated)
+        line, code = run_schedule(
+            options.run_schedule or "",
+            _schedule_run_deps(tools, platform, runner=update_all_runner)
+            if options.run_schedule == "update-all"
+            else _schedule_run_deps(tools, platform),
+            parent_holds_lock=options.parent_holds_run_lock,
+            lock_holder_pid=options.lock_holder_pid,
+        )
+        print(line)
+        return code
 
 
 def main(argv: list[str]) -> int:

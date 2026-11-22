@@ -7,16 +7,24 @@ line with a matching exit code. This module decides; `setup.py` only wires the r
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from types import FrameType
 
 from installer import cursor_shim, runlock, schedules, update_all, update_all_state, update_check
 from installer.model import Tool
 from installer.notify import Notifier, no_notifier
 from installer.ownership import ManagerOwnership
-from installer.run import CommandError
+from installer.run import TIMEOUT_CODE, CommandError, apply_child_env
 from installer.sanitize import sanitize_log_line
 from installer.update import (
     GuardFn,
@@ -38,8 +46,126 @@ from installer.version_status import ToolState, outdated_ids
 _REASON_LIMIT = 300
 
 
+@contextmanager
+def update_all_stdin_closed() -> Generator[None]:
+    """Close stdin for the update-all route, including its bounded queries."""
+    try:
+        saved = os.dup(0)
+    except OSError:
+        yield
+        return
+    try:
+        null = os.open(os.devnull, os.O_RDONLY)
+        try:
+            os.dup2(null, 0)
+            yield
+        finally:
+            os.dup2(saved, 0)
+            os.close(null)
+    finally:
+        os.close(saved)
+
+
+def _end_update_group(child: subprocess.Popen[str]) -> bool:
+    """End the group with four bounded waits; report whether it vanished."""
+
+    def send(sig: signal.Signals) -> None:
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(child.pid, sig)
+
+    send(signal.SIGTERM)
+    with suppress(subprocess.TimeoutExpired):
+        child.wait(timeout=update_all.KILL_GRACE)
+    send(signal.SIGKILL)
+    with suppress(subprocess.TimeoutExpired):
+        child.wait(timeout=update_all.KILL_GRACE)
+    try:
+        child.communicate(timeout=update_all.KILL_GRACE)
+    except subprocess.TimeoutExpired:
+        for pipe in (child.stdout, child.stderr):
+            if pipe is not None:
+                pipe.close()
+    deadline = time.monotonic() + update_all.KILL_GRACE
+    while True:
+        try:
+            os.killpg(child.pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(0.05, remaining))
+    send(signal.SIGKILL)
+    print("update-all: a command group did not end after SIGKILL", file=sys.stderr)
+    return False
+
+
+def update_all_runner(
+    cmd: list[str], *, timeout: float | None = update_all.COMMAND_TIMEOUT
+) -> None:
+    """Run a bounded command in its own session, with closed stdin and a copied child policy.
+
+    The group is ended and awaited on timeout or interruption; main-thread TERM and HUP
+    are forwarded through cleanup. Descendants starting new sessions can escape the group.
+    Manager and postinstall queries, probes, version probes, pnpm list and bin, smoke
+    checks, cursor model lists and GitHub lookups have their own bounds.
+    """
+    env = os.environ.copy()
+    apply_child_env(env)
+    env["UV_NO_MODIFY_PATH"] = "1"
+    try:
+        child = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise CommandError(cmd, 127, detail=str(exc)) from exc
+
+    def interrupted(signum: int, _frame: FrameType | None) -> None:
+        raise SystemExit(128 + signum)
+
+    previous: dict[signal.Signals, int | None | Callable[[int, FrameType | None], None]] = {}
+    try:
+        if threading.current_thread() is threading.main_thread():
+            for sig in (signal.SIGTERM, signal.SIGHUP):
+                previous[sig] = signal.signal(sig, interrupted)
+        try:
+            _, stderr = child.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            ended = _end_update_group(child)
+            detail = (
+                f"timed out after {timeout:g}s"
+                if ended and timeout is not None
+                else ("command group did not end after SIGKILL")
+            )
+            raise CommandError(cmd, TIMEOUT_CODE, detail=detail) from exc
+        except BaseException:
+            _end_update_group(child)
+            raise
+        if child.returncode:
+            raise CommandError(
+                cmd,
+                child.returncode,
+                detail=stderr.strip().splitlines()[0] if stderr.strip() else "",
+            )
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def _local_now() -> datetime:
     return datetime.now().astimezone()
+
+
+def _euid() -> int:
+    return os.geteuid()
 
 
 @dataclass(frozen=True)
@@ -57,6 +183,8 @@ class RunDeps:
     git: update_check.GitRunner | None = None
     # Inject the clock so the calendar day is a test input.
     now: Callable[[], datetime] = _local_now
+    # Injected so root refusal is a test input.
+    euid: Callable[[], int] = _euid
 
 
 def _first_line(text: str) -> str:
@@ -510,6 +638,8 @@ def run_schedule(
         schedules.JobKind.UPDATE_ALL,
     ):
         return f"failed: {schedule_id} is not an update schedule", 2
+    if schedule.kind is schedules.JobKind.UPDATE_ALL and deps.euid() == 0:
+        return "failed: update-all refuses to run as root", 1
     lock_path = deps.context.lock_path if deps.context is not None else runlock.run_lock_path()
     if parent_holds_lock:
         if schedule.kind is schedules.JobKind.UPDATE_ALL and not runlock.held_by(

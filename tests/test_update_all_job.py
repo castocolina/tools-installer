@@ -16,6 +16,7 @@ from tests.test_update_check_job import snapshot
 def make_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str = "empty"
 ) -> tuple[Path, Path, Path, Path]:
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
     home = tmp_path / "home"
     home.mkdir()
     checkout = tmp_path / "co"

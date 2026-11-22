@@ -51,7 +51,7 @@ from installer.pnpm_globals import NodeGlobalsReport, NodeInstallPolicy
 from installer.policies_screen import PolicyInputs
 from installer.policy import Policy, omz_plugins_policy, tweak_policy
 from installer.resolve import UnavailableReason
-from installer.run import run_captured, run_git_isolated
+from installer.run import Runner, run_captured, run_git_isolated
 from installer.schedules_screen import ScheduleInputs
 from installer.session import Disposition, PlanRow, Result, RowOutcome
 from installer.settings import Settings, SettingsStore, load_settings, save_settings
@@ -1783,7 +1783,9 @@ def test_build_app_shares_one_update_service_and_invalidate(
     # same policy, not merely two equal-looking closures.
     replayed: list[NodeInstallPolicy] = []
 
-    def fake_reinstall(packages: Sequence[str], *, policy: NodeInstallPolicy) -> tuple[str, ...]:
+    def fake_reinstall(
+        packages: Sequence[str], *, policy: NodeInstallPolicy, runner: Runner = run_captured
+    ) -> tuple[str, ...]:
         replayed.append(policy)
         return tuple(packages)
 
@@ -1898,7 +1900,9 @@ def test_build_services_binds_the_update_service_to_the_refresh_service(
 
     replayed: list[NodeInstallPolicy] = []
 
-    def fake_reinstall(packages: Sequence[str], *, policy: NodeInstallPolicy) -> tuple[str, ...]:
+    def fake_reinstall(
+        packages: Sequence[str], *, policy: NodeInstallPolicy, runner: Runner = run_captured
+    ) -> tuple[str, ...]:
         replayed.append(policy)
         return tuple(packages)
 

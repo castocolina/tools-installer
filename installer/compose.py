@@ -345,7 +345,11 @@ def _cache_redirect_policies(
 
 
 def _sync_terminals(
-    platform: Platform, *, report_changes: bool = False, strip_only: bool = False
+    platform: Platform,
+    *,
+    report_changes: bool = False,
+    strip_only: bool = False,
+    runner: Runner = run_captured,
 ) -> str | None:
     """The single Phase 15.6 terminal-shell synchronizer every lifecycle route
     reuses (D-01): Policies' OMZ-plugin apply, the direct `u` update,
@@ -369,7 +373,7 @@ def _sync_terminals(
         platform=platform,
         lookup=which_with_brew,
         strip_only=strip_only,
-        runner=run_captured,  # herdr's reload; captured, so it never prints into the TUI
+        runner=runner,  # herdr's reload; captured, so it never prints into the TUI
     )
     return sync_message(result, report_changes=report_changes)
 
@@ -433,13 +437,13 @@ def _build_services(
     def _reinstall_globals(packages: Sequence[str]) -> tuple[str, ...]:
         # The set to replay is the one the user saw and consented to, passed in
         # by the screen — not one re-derived here behind their back.
-        return pnpm_globals.reinstall_node_globals(packages, policy=policy)
+        return pnpm_globals.reinstall_node_globals(packages, policy=policy, runner=runner)
 
     def _terminal_follow_up() -> str | None:
         # D-01/15.6-05: the SAME terminal synchronizer every lifecycle route
         # reuses (`_sync_terminals`), bound to this composition's platform. A write is
         # named in the update's detail (X-01).
-        return _sync_terminals(platform, report_changes=True)
+        return _sync_terminals(platform, report_changes=True, runner=runner)
 
     updates = UpdateService(
         platform=platform,

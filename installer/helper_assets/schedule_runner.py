@@ -75,6 +75,8 @@ _WAIT_POLL = 5
 _INSTALLER_JOB = "installer"  # source: installer/runlock.py INSTALLER_JOB
 _HOLDER_READ = 4096
 _KILL_GRACE = 10  # seconds a group gets between SIGTERM and SIGKILL, and for the last collect
+# Must exceed installer/update_all.py CLEANUP_BUDGET; this standalone runner cannot import it.
+_UPDATE_ALL_STOP_BUDGET = 30
 # The house child policy; source: installer/run.py CHILD_ENV (this file cannot import it).
 _CHILD_ENV = {"HOMEBREW_NO_SUDO": "1", "HOMEBREW_NO_AUTOREMOVE": "1"}
 # Passed through when present: the unit Environment carries the installing shell's proxy,
@@ -120,6 +122,7 @@ class _Interrupted(BaseException):
 
 
 _active: list[subprocess.Popen[bytes]] = []  # the children a signal handler must stop
+_stop_budgets: dict[int, float] = {}
 
 
 def _now() -> str:
@@ -204,9 +207,18 @@ def _kill_group(pid: int, sig: signal.Signals) -> None:
 
 def _stop(proc: subprocess.Popen[bytes]) -> None:
     """SIGTERM the child's group, give it a grace, then SIGKILL what is left."""
+    started = time.monotonic()
     _kill_group(proc.pid, signal.SIGTERM)
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=_KILL_GRACE)
+    budget = _stop_budgets.get(proc.pid)
+    if budget is not None:
+        while time.monotonic() - started < budget:
+            try:
+                os.killpg(proc.pid, 0)
+            except (ProcessLookupError, PermissionError):
+                break
+            time.sleep(min(0.1, max(0.0, budget - (time.monotonic() - started))))
     _kill_group(proc.pid, signal.SIGKILL)
 
 
@@ -222,6 +234,7 @@ def _run_child(
     timeout: float,
     cwd: Path | None = None,
     extra_env: dict[str, str] | None = None,
+    stop_budget: float | None = None,
 ) -> _Child:
     """Run argv with no shell, in its own session; on a timeout kill the whole group."""
     try:
@@ -237,6 +250,8 @@ def _run_child(
         )
     except OSError as error:
         return _Child(None, b"", b"", f"could not start: {_sanitize(str(error))}")
+    if stop_budget is not None:
+        _stop_budgets[proc.pid] = stop_budget
     _active.append(proc)
     try:
         out, err = proc.communicate(timeout=timeout)
@@ -253,6 +268,7 @@ def _run_child(
         return _Child(None, out, err, "timed out")
     finally:
         _active.remove(proc)
+        _stop_budgets.pop(proc.pid, None)
     return _Child(proc.returncode, out, err, None)
 
 
@@ -328,6 +344,7 @@ def _update(
     readonly: bool = False,
     lock_holder: bool = False,
     timeout: float | None = None,
+    stop_budget: float | None = None,
 ) -> str:
     """Run the installer's own `--run-schedule`; its last result line is ours."""
     setup = Path(installer) / "setup.py"
@@ -349,6 +366,7 @@ def _update(
             *(["--lock-holder-pid", str(os.getpid())] if lock_holder else []),
         ],
         timeout=_UPDATE_TIMEOUT if timeout is None else timeout,
+        stop_budget=stop_budget,
         cwd=Path(installer),
         extra_env=(
             {
@@ -530,6 +548,9 @@ def main(argv: list[str] | None = None) -> int:
 def _locked_run(
     job: str, run_id: str, options: dict[str, str], forwarded: list[str], emit: Emit
 ) -> int:
+    if job == "update-all" and os.geteuid() == 0:
+        print("schedule_runner: failed: update-all refuses to run as root", file=sys.stderr)
+        return 1
     with _run_lock(Path(options["--lock"]), run_id, emit) as held:
         if not held:
             emit("skipped: busy")
@@ -550,6 +571,7 @@ def _locked_run(
                 readonly=True,
                 timeout=_UPDATE_ALL_TIMEOUT,
                 lock_holder=True,
+                stop_budget=_UPDATE_ALL_STOP_BUDGET,
             ),
         }
         try:

@@ -213,6 +213,7 @@ def run_deps(
     now: Callable[[], datetime] | None = None,
     notify: Notifier | None = None,
     refresh: Refresher | None = None,
+    euid: Callable[[], int] | None = None,
 ) -> RunDeps:
     from datetime import datetime as clock
 
@@ -225,4 +226,5 @@ def run_deps(
         notify or FakeNotifier(),
         refresh,
         now=now or (lambda: clock.now().astimezone()),
+        euid=euid or (lambda: 1000),
     )

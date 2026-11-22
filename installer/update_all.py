@@ -16,6 +16,11 @@ if TYPE_CHECKING:
     from installer.update import UpdateOutcome
     from installer.version_status import ToolState
 
+# Each command is bounded like the stdlib runner's manager bound (D-11).
+COMMAND_TIMEOUT: Final = 1200
+KILL_GRACE: Final = 3
+CLEANUP_BUDGET: Final = 4 * KILL_GRACE
+
 RESULT_LIMIT = 300
 FIRST_FAILED_LIMIT = 40
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")

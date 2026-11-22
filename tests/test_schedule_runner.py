@@ -1311,6 +1311,7 @@ def test_a_silently_failing_mac_notifier_reaches_the_log_with_a_fixed_reason(
 def test_update_all_child_is_read_only_bound_and_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
     checkout = _checkout(tmp_path)
     bindir = tmp_path / "bin"
     body = (
@@ -1357,6 +1358,7 @@ def test_update_all_child_is_read_only_bound_and_closed(
 
 
 def test_update_all_timeout_and_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
     checkout = _checkout(tmp_path)
     pidfile = tmp_path / "uv.pid"
     uv = _hanging_uv(tmp_path, f'echo $$ > "{pidfile}"\nsleep 60')
