@@ -95,6 +95,7 @@ from installer.tweaks import (
     LegacyStrip,
 )
 from installer.ui_common import run_live
+from installer.update_check import git_for_check
 from installer.version_status import probed_version
 from installer.versions import probe_version_output
 from installer.wizard_app import UnifiedApp
@@ -543,6 +544,8 @@ def _schedule_run_deps(tools: list[Tool], platform: Platform) -> RunDeps:
             read_models=cursor_shim.read_models,
         ),
         notify=notifier_for(platform.os),
+        refresh=version_refresh,
+        git=git_for_check,
     )
 
 

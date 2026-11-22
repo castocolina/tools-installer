@@ -55,10 +55,13 @@ def parse_args(argv: list[str]) -> Options:
     )
     parser.add_argument(
         "--run-schedule",
-        choices=list(schedules.UPDATE_SCHEDULE_IDS),
+        choices=list(schedules.RUN_SCHEDULE_IDS),
         default=None,
         metavar="ID",
-        help="run one scheduled update and print one result line (used by the schedule timers)",
+        help=(
+            "run one scheduled job (an update row or the update check) and print one result line "
+            "(used by the schedule timers)"
+        ),
     )
     parser.add_argument(
         "--parent-holds-run-lock",

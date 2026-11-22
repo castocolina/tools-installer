@@ -99,6 +99,11 @@ SCHEDULES: Final[tuple[Schedule, ...]] = (
 UPDATE_SCHEDULE_IDS: Final[tuple[str, ...]] = tuple(
     schedule.id for schedule in SCHEDULES if schedule.kind is JobKind.UPDATE
 )
+# IDs accepted by --run-schedule.
+RUN_SCHEDULE_IDS: Final[tuple[str, ...]] = (
+    *UPDATE_SCHEDULE_IDS,
+    *(schedule.id for schedule in SCHEDULES if schedule.kind is JobKind.CHECK_UPDATES),
+)
 _BY_ID: Final[dict[str, Schedule]] = {schedule.id: schedule for schedule in SCHEDULES}
 
 

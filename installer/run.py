@@ -183,16 +183,27 @@ _GIT_INHERITED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_ASKPASS", "
 _GIT_ISOLATION = ["-c", "core.hooksPath=/dev/null", "-c", "core.autocrlf=false"]
 
 
-def run_git_isolated(argv: list[str]) -> str:
+def run_git_isolated(
+    argv: list[str],
+    *,
+    timeout: float = 600,
+    new_session: bool = True,
+    env_extra: Mapping[str, str] | None = None,
+) -> str:
     """Run a `git ...` argv the user's own git state cannot steer, bounded and never prompting.
 
     The child loses the repository variables and askpass helpers it would inherit, never asks
     for a credential (an `insteadOf` rewrite to SSH would otherwise wait on a GUI), and runs
-    with no hooks and `core.autocrlf` off.
+    with no hooks and `core.autocrlf` off. `timeout`, `new_session` and `env_extra` configure
+    the child without overriding the prompt isolation.
     """
     env = {key: value for key, value in os.environ.items() if key not in _GIT_INHERITED}
+    if env_extra is not None:
+        env.update(env_extra)
     env.update(GIT_TERMINAL_PROMPT="0", SSH_ASKPASS_REQUIRE="never")
-    return run_output([argv[0], *_GIT_ISOLATION, *argv[1:]], timeout=600, env=env)
+    return run_output(
+        [argv[0], *_GIT_ISOLATION, *argv[1:]], timeout=timeout, env=env, new_session=new_session
+    )
 
 
 def run_captured(cmd: list[str], *, timeout: float | None = None) -> None:

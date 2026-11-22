@@ -1,7 +1,9 @@
 """Update-check decisions over injected seams, without installing, updating, removing or pulling.
 
-Git failures are reported as fixed categories only. The production runner and its isolation
-are defined at the wiring boundary.
+Git failures are reported as fixed categories only. The production runner disables hooks,
+prompts, askpass and credential helpers, and lazy fetch (Git 2.44 or newer); older Git may
+ignore the lazy-fetch setting. GIT_SSH_COMMAND outranks core.sshCommand. The user's and the
+repository's other Git configuration remains in effect.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from installer.atomic import atomic_replace_entry, read_capped
 from installer.locations import ensure_dir
 from installer.model import TOOL_ID_RE, Tool
 from installer.notify import Notifier, reason_line
-from installer.run import TIMEOUT_CODE, CommandError, command_error_line
+from installer.run import TIMEOUT_CODE, CommandError, command_error_line, run_git_isolated
 from installer.version_cache import load_manager_snapshot, load_version_cache, stamp_time
 from installer.version_status import FailureSink, Health, ToolState, outdated_ids
 
@@ -44,6 +46,7 @@ _BODY_IDS = 8
 _MANAGER_SOURCES = frozenset({"brew", "cask", "pnpm", "uv"})
 
 GitRunner = Callable[[list[str]], str]
+GIT_TIMEOUT = 20
 INSTALLER_ID = "tools-installer"
 _SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 SKIP_REASONS = frozenset(
@@ -57,6 +60,20 @@ SKIP_REASONS = frozenset(
         "origin returned an unexpected answer",
     }
 )
+
+
+def git_for_check(argv: list[str]) -> str:
+    """Run a bounded, noninteractive Git query in the caller's process group."""
+    return run_git_isolated(
+        [argv[0], "-c", "credential.helper=", "-c", "core.askPass=", *argv[1:]],
+        timeout=GIT_TIMEOUT,
+        new_session=False,
+        env_extra={
+            "GIT_SSH_COMMAND": "ssh -o BatchMode=yes",  # SSH cannot prompt.
+            "GIT_NO_LAZY_FETCH": "1",  # Do not fetch missing objects.
+            "GIT_ASKPASS": "",  # Override any configured askpass program.
+        },
+    )
 
 
 def read_notified(path: Path) -> tuple[frozenset[str], bool]:

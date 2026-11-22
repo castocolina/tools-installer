@@ -1027,6 +1027,36 @@ def test_run_git_isolated_scrubs_the_user_git_state(monkeypatch: pytest.MonkeyPa
     assert seen["timeout"] == 600
 
 
+def test_run_git_isolated_accepts_a_timeout_a_session_flag_and_extra_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict[str, object]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.append(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert (
+        run_git_isolated(
+            ["git", "status"],
+            timeout=20,
+            new_session=False,
+            env_extra={"GIT_SSH_COMMAND": "x", "GIT_TERMINAL_PROMPT": "1"},
+        )
+        == "ok"
+    )
+    env = seen[0]["env"]
+    assert isinstance(env, dict)
+    assert env["GIT_SSH_COMMAND"] == "x"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert seen[0]["timeout"] == 20
+    assert seen[0]["start_new_session"] is False
+    run_git_isolated(["git", "status"])
+    assert seen[1]["timeout"] == 600
+    assert seen[1]["start_new_session"] is True
+
+
 def test_in_group_runner_keeps_the_process_group(monkeypatch: pytest.MonkeyPatch) -> None:
     """R2-04: only the headless --run-schedule route keeps the child in the caller's group."""
     seen: list[dict[str, object]] = []

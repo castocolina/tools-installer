@@ -2,6 +2,7 @@ import re
 
 import pytest
 
+from installer import schedules
 from installer.cli import Options, parse_args
 
 
@@ -109,6 +110,15 @@ def test_parse_args_is_unchanged(capsys: pytest.CaptureFixture[str]) -> None:
         "--run-schedule",
         "--parent-holds-run-lock",
     }
+
+
+def test_cli_run_schedule_accepts_the_update_check() -> None:
+    assert parse_args(["--run-schedule", "check-updates"]).run_schedule == "check-updates"
+    for bad in ("tmp-cleanup", "cache-cleanup", "bogus"):
+        with pytest.raises(SystemExit) as error:
+            parse_args(["--run-schedule", bad])
+        assert error.value.code == 2
+    assert (*schedules.UPDATE_SCHEDULE_IDS, "check-updates") == schedules.RUN_SCHEDULE_IDS
 
 
 def test_cli_run_schedule_flags() -> None:

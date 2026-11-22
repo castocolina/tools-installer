@@ -1,4 +1,4 @@
-"""The headless single-tool update a schedule timer runs (SPEC R6).
+"""The headless single-tool update and daily update check a schedule timer runs (SPEC R6).
 
 `setup.py --run-schedule update-<tool>` lands here: one tool is updated through the same
 ownership-first `UpdateService` the catalog's `u` uses, and the outcome becomes one plain result
@@ -11,7 +11,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from installer import cursor_shim, runlock, schedules
+from installer import cursor_shim, runlock, schedules, update_check
 from installer.model import Tool
 from installer.notify import Notifier, no_notifier
 from installer.ownership import ManagerOwnership
@@ -33,6 +33,8 @@ class RunDeps:
     context: schedules.ScheduleContext | None
     # The default never reaches the host.
     notify: Notifier = no_notifier
+    refresh: update_check.Refresher | None = None
+    git: update_check.GitRunner | None = None
 
 
 def _first_line(text: str) -> str:
@@ -121,20 +123,30 @@ def _update_cursor_agent(
         return f"failed: {_reason(error)}", 1
 
 
+def _check(deps: RunDeps) -> tuple[str, int]:
+    if deps.refresh is None or deps.git is None or deps.context is None:
+        return "failed: the update check is not wired", 2
+    return update_check.run_check(
+        deps.tools, refresh=deps.refresh, notify=deps.notify, context=deps.context, git=deps.git
+    )
+
+
 def _run_unlocked(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, int]:
+    if schedule.kind is schedules.JobKind.CHECK_UPDATES:
+        return _check(deps)
     if schedule.target == "cursor-agent" and deps.context is not None:
         return _update_cursor_agent(schedule, deps, deps.context)
     return _update(schedule, deps)
 
 
 def run_schedule(schedule_id: str, deps: RunDeps, *, parent_holds_lock: bool) -> tuple[str, int]:
-    """Run one update schedule and return its result line and exit code.
+    """Run one update or check schedule and return its result line and exit code.
 
     The schedule runner that spawned a timer's run already holds the run lock
     (`parent_holds_lock`); a manual run takes it itself and skips when it is held (D-12).
     """
     schedule = schedules.schedule_by_id(schedule_id)
-    if schedule.kind is not schedules.JobKind.UPDATE:
+    if schedule.kind not in (schedules.JobKind.UPDATE, schedules.JobKind.CHECK_UPDATES):
         return f"failed: {schedule_id} is not an update schedule", 2
     if parent_holds_lock:
         return _run_unlocked(schedule, deps)

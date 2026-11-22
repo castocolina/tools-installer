@@ -6,14 +6,15 @@ no real package manager, vendor CLI or timer is ever started.
 
 import os
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 import setup
-from installer import cli, cursor_shim, executors, receipts, runlock, schedules
+from installer import cli, cursor_shim, executors, receipts, runlock, schedules, update_check
 from installer.helper_assets import schedule_runner
 from installer.legacy_guard import REDIRECT_SENTINEL
 from installer.model import Tool, load_tools
@@ -28,7 +29,15 @@ from installer.update import (
     perform_update,
     resolve_update_argv,
 )
+from installer.version_status import FailureSink
 from tests.compose_patch import patch_composition
+from tests.update_check_doubles import (
+    FakeGit,
+    FakeNotifier,
+    FakeRefresher,
+    check_context,
+    outdated_state,
+)
 
 _REGISTRY = Path(__file__).resolve().parent.parent / "installer" / "registry.toml"
 _FEDORA = Platform(os="fedora", arch="amd64", immutable=False, has_brew=False)
@@ -146,6 +155,170 @@ def _claude(
     recorder = Recorder()
     deps = _deps(tool, _ownership(tool, "installer"), recorder, _versions(*versions))
     return deps, recorder, leaf
+
+
+def _check_deps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[RunDeps, Recorder, FakeRefresher]:
+    deps, recorder, _leaf = _claude(tmp_path, monkeypatch)
+    ctx = check_context(tmp_path, monkeypatch)
+    tool = deps.tools[0]
+    refresh = FakeRefresher(tmp_path / "versions.json", {tool.id: outdated_state(tool)})
+    wired = replace(
+        deps, context=ctx, refresh=refresh, git=FakeGit(branch="feature"), notify=FakeNotifier()
+    )
+    return wired, recorder, refresh
+
+
+def test_check_updates_dispatches_to_the_check_and_calls_no_update_executor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deps, recorder, refresh = _check_deps(tmp_path, monkeypatch)
+    assert run_schedule("check-updates", deps, parent_holds_lock=True) == (
+        "ok: 1 updates available",
+        0,
+    )
+    assert vars(deps.updates)["runs"] == []
+    assert recorder.calls == []
+    assert len(refresh.calls) == 1
+
+
+def test_a_manual_check_takes_the_lock_skips_when_busy_and_releases_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deps, _recorder, refresh = _check_deps(tmp_path, monkeypatch)
+    path = runlock.run_lock_path()
+    held = runlock.try_acquire(path, "installer")
+    assert held is not None
+    try:
+        assert run_schedule("check-updates", deps, parent_holds_lock=False) == ("skipped: busy", 0)
+        assert refresh.calls == []
+    finally:
+        held.release()
+    seen: list[runlock.Holder | None] = []
+    original = refresh.refresh
+
+    def observing(
+        tools: Sequence[Tool], *, stale_after: timedelta, on_failure: FailureSink | None
+    ) -> None:
+        seen.append(runlock.holder(path))
+        original(tools, stale_after=stale_after, on_failure=on_failure)
+
+    monkeypatch.setattr(refresh, "refresh", observing)
+    assert run_schedule("check-updates", deps, parent_holds_lock=False) == (
+        "ok: 1 updates available",
+        0,
+    )
+    [holder] = seen
+    assert holder is not None
+    assert (holder.job, holder.pid) == ("check-updates", os.getpid())
+    assert runlock.holder(path) is None
+    again = runlock.try_acquire(path, "installer")
+    assert again is not None
+    again.release()
+
+
+def test_the_parent_holding_the_lock_means_the_check_never_opens_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deps, _recorder, _refresh = _check_deps(tmp_path, monkeypatch)
+    assert run_schedule("check-updates", deps, parent_holds_lock=True)[1] == 0
+    assert not runlock.run_lock_path().exists()
+
+
+def test_tmp_and_cache_cleanup_stay_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deps, recorder, _leaf = _claude(tmp_path, monkeypatch)
+    for job in ("tmp-cleanup", "cache-cleanup"):
+        assert run_schedule(job, deps, parent_holds_lock=True) == (
+            f"failed: {job} is not an update schedule",
+            2,
+        )
+    assert recorder.calls == []
+
+
+def test_an_unwired_check_fails_loudly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    deps, recorder, _leaf = _claude(tmp_path, monkeypatch)
+    positional = RunDeps(deps.tools, deps.updates, deps.resolve_owner, deps.probe_version, None)
+    assert run_schedule("check-updates", positional, parent_holds_lock=True) == (
+        "failed: the update check is not wired",
+        2,
+    )
+    ctx = check_context(tmp_path, monkeypatch)
+    missing_refresh = replace(positional, context=ctx, git=FakeGit(branch="feature"))
+    assert run_schedule("check-updates", missing_refresh, parent_holds_lock=True) == (
+        "failed: the update check is not wired",
+        2,
+    )
+    refresh = FakeRefresher(tmp_path / "versions.json", {})
+    for unwired in (
+        replace(positional, context=ctx, refresh=refresh),
+        replace(positional, refresh=refresh, git=FakeGit(branch="feature")),
+    ):
+        assert run_schedule("check-updates", unwired, parent_holds_lock=True) == (
+            "failed: the update check is not wired",
+            2,
+        )
+    assert refresh.calls == []
+    assert recorder.calls == []
+
+
+def test_setup_wires_the_check_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Refresh:
+        def resolve_owner(self, tool: Tool) -> ManagerOwnership:
+            return _ownership(tool, "unknown")
+
+    refresh = Refresh()
+
+    def build(tools: list[Tool], platform: Platform, **kwargs: object) -> tuple[object, ...]:
+        updates = UpdateService(
+            platform=platform,
+            managed_packages=lambda: (),
+            replay_globals=lambda _packages: (),
+            reresolve_ownership=lambda _tool: _ownership(tools[0], "unknown"),
+        )
+        return refresh, updates, None, None
+
+    patch_composition(monkeypatch, "_build_services", build)
+    deps = vars(setup)["_schedule_run_deps"]([_tool("claude")], _FEDORA)
+    assert deps.refresh is refresh
+    assert deps.git is update_check.git_for_check
+
+
+def test_setup_wires_the_isolated_git_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Refresh:
+        def resolve_owner(self, tool: Tool) -> ManagerOwnership:
+            return _ownership(tool, "unknown")
+
+    def build(tools: list[Tool], platform: Platform, **kwargs: object) -> tuple[object, ...]:
+        updates = UpdateService(
+            platform=platform,
+            managed_packages=lambda: (),
+            replay_globals=lambda _packages: (),
+            reresolve_ownership=lambda _tool: _ownership(tools[0], "unknown"),
+        )
+        return Refresh(), updates, None, None
+
+    patch_composition(monkeypatch, "_build_services", build)
+    deps = vars(setup)["_schedule_run_deps"]([_tool("claude")], _FEDORA)
+    assert deps.git is update_check.git_for_check
+
+
+def test_setup_routes_the_check_through_run_schedule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    deps, recorder, refresh = _check_deps(tmp_path, monkeypatch)
+    monkeypatch.setattr(setup, "detect", lambda: _FEDORA)
+
+    def fake_deps(_tools: list[Tool], _platform: Platform) -> RunDeps:
+        return deps
+
+    monkeypatch.setattr(setup, "_schedule_run_deps", fake_deps)
+    assert setup.main(["--run-schedule", "check-updates", "--parent-holds-run-lock"]) == 0
+    assert capsys.readouterr().out == "ok: 1 updates available\n"
+    assert len(refresh.calls) == 1
+    assert recorder.calls == []
 
 
 def test_run_schedule_updates_claude_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

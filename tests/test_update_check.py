@@ -2,6 +2,7 @@
 
 import os
 import re
+import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -33,6 +34,47 @@ from tests.update_check_doubles import (
     tool_named,
     unknown_state,
 )
+
+
+def test_the_git_runner_is_isolated_bounded_and_credential_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen["cmd"] = cmd
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    for key in ("GIT_ASKPASS", "SSH_ASKPASS", "GIT_DIR"):
+        monkeypatch.setenv(key, "/unsafe")
+    assert update_check.git_for_check(["git", "-C", "/w", "rev-parse", "HEAD"]) == "ok"
+    assert seen["cmd"] == [
+        "git",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.autocrlf=false",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "core.askPass=",
+        "-C",
+        "/w",
+        "rev-parse",
+        "HEAD",
+    ]
+    assert seen["timeout"] == 20
+    assert seen["start_new_session"] is False
+    assert seen["stdin"] is subprocess.DEVNULL
+    env = seen["env"]
+    assert isinstance(env, dict)
+    assert env["GIT_SSH_COMMAND"] == "ssh -o BatchMode=yes"
+    assert env["GIT_NO_LAZY_FETCH"] == "1"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GIT_ASKPASS"] == ""
+    assert "SSH_ASKPASS" not in env and "GIT_DIR" not in env
 
 
 @pytest.mark.parametrize(
