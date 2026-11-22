@@ -1,22 +1,24 @@
 """Fakes for the update check; no external commands are launched."""
 
+import hashlib
 from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from installer import schedules
+from installer import receipts, schedules
+from installer.manager_versions import OutdatedReport
 from installer.model import Method, Tool
 from installer.notify import Notifier
-from installer.ownership import ManagerOwnership
+from installer.ownership import ManagerInventory, ManagerOwnership
 from installer.platform import Platform
 from installer.run import CommandError
 from installer.schedule_run import RunDeps
 from installer.update import UpdateService
 from installer.update_check import GitRunner, Refresher
 from installer.version_cache import VersionCacheEntry, save_version_cache
-from installer.version_status import FailureSink, ToolState, VersionStatus
+from installer.version_status import FailureSink, ToolState, VersionRefreshService, VersionStatus
 from tests.state_doubles import MACOS, pass_state
 
 
@@ -195,3 +197,80 @@ class FakeGit:
         if args == ("merge-base", "--is-ancestor", SHA_B, "HEAD"):
             return ""
         raise AssertionError(f"unexpected git query: {args}")
+
+
+YQ_BYTES = b"#!/bin/sh\necho yq 4.54.1\n"
+YQ_SHA = hashlib.sha256(YQ_BYTES).hexdigest()
+
+
+def yq_tool() -> Tool:
+    return Tool(
+        id="yq",
+        name="yq",
+        category="data",
+        cmd="yq",
+        tier="user",
+        methods=(
+            Method(
+                kind="github_release",
+                params={
+                    "repo": "mikefarah/yq",
+                    "asset": "yq_linux_{arch.deb}",
+                    "member": "yq",
+                    "raw": True,
+                },
+            ),
+        ),
+    )
+
+
+def place_yq(home: Path) -> Path:
+    placed = home / ".local/bin/yq"
+    placed.parent.mkdir(parents=True, exist_ok=True)
+    placed.write_bytes(YQ_BYTES)
+    return placed
+
+
+def place_yq_with_receipt(home: Path) -> Path:
+    placed = place_yq(home)
+    tool = yq_tool()
+    assert receipts.record(
+        tool, tool.methods[0], package=None, smoke=None, default_bin_dir=placed.parent
+    )
+    return placed
+
+
+def real_service(
+    home: Path, *, resolve_tag: Callable[[str], str], now: Callable[[], datetime], installed: str
+) -> VersionRefreshService:
+    bin_dir = home / ".local/bin"
+
+    def no_npm(package: str) -> str:
+        raise AssertionError(f"unexpected npm query: {package}")
+
+    def inventory(**_kwargs: object) -> ManagerInventory:
+        return ManagerInventory(
+            brew_formulae={}, brew_casks={}, pnpm_globals=frozenset(), uv_tools={}, brew_prefix=None
+        )
+
+    def outdated(**_kwargs: object) -> OutdatedReport:
+        return OutdatedReport(brew={}, cask={}, pnpm={}, uv={})
+
+    return VersionRefreshService(
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        cache_path=home / ".local/state/tools-installer/versions.json",
+        resolve_tag=resolve_tag,
+        resolve_npm=no_npm,
+        now=now,
+        managed_bin_dir=bin_dir,
+        home=home,
+        which=lambda cmd: str(bin_dir / cmd) if (bin_dir / cmd).exists() else None,
+        artifacts_for=lambda tool: [bin_dir / tool.cmd],
+        read_inventory_fn=inventory,
+        read_outdated_fn=outdated,
+        pnpm_packages=lambda: (),
+        resolve_pnpm=lambda: None,
+        bun_versions=lambda: {},
+        query=lambda *_args, **_kwargs: "",
+        probe_output=lambda _argv: installed,
+    )
