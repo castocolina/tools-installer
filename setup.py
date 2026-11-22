@@ -67,6 +67,7 @@ from installer.locations import (
     rc_paths_for_mode,
 )
 from installer.model import Tool, load_tools
+from installer.notify import notifier_for
 from installer.platform import Platform, detect
 from installer.prompt import CallbackPrompter
 from installer.receipts import scan_retired
@@ -541,6 +542,7 @@ def _schedule_run_deps(tools: list[Tool], platform: Platform) -> RunDeps:
             checkout=Path(__file__).resolve().parent,
             read_models=cursor_shim.read_models,
         ),
+        notify=notifier_for(platform.os),
     )
 
 

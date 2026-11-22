@@ -13,6 +13,7 @@ from pathlib import Path
 
 from installer import cursor_shim, runlock, schedules
 from installer.model import Tool
+from installer.notify import Notifier, no_notifier
 from installer.ownership import ManagerOwnership
 from installer.run import CommandError
 from installer.sanitize import sanitize_log_line
@@ -30,6 +31,8 @@ class RunDeps:
     resolve_owner: Callable[[Tool], ManagerOwnership]
     probe_version: Callable[[Tool, ManagerOwnership], str | None]
     context: schedules.ScheduleContext | None
+    # The default never reaches the host.
+    notify: Notifier = no_notifier
 
 
 def _first_line(text: str) -> str:

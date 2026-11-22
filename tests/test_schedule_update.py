@@ -253,6 +253,41 @@ def test_run_schedule_uses_the_in_group_runner(monkeypatch: pytest.MonkeyPatch) 
     assert seen == {"runner": run_captured_in_group}
 
 
+def test_run_deps_default_notifier_sends_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deps, _recorder, _leaf = _claude(tmp_path, monkeypatch)
+    positional = RunDeps(deps.tools[:0], deps.updates, deps.resolve_owner, deps.probe_version, None)
+    from installer.notify import no_notifier
+
+    assert positional.notify is no_notifier
+    assert positional.notify("s", "b") == "no notifier is configured"
+
+
+def test_run_schedule_deps_carry_the_platform_notifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    from installer.notify import no_notifier
+
+    class Refresh:
+        def resolve_owner(self, tool: Tool) -> ManagerOwnership:
+            return _ownership(tool, "unknown")
+
+    def build(
+        tools: list[Tool], platform: Platform, **kwargs: object
+    ) -> tuple[object, UpdateService, object, object]:
+        updates = UpdateService(
+            platform=platform,
+            managed_packages=lambda: (),
+            replay_globals=lambda _packages: (),
+            reresolve_ownership=lambda _tool: _ownership(tools[0], "unknown"),
+        )
+        return Refresh(), updates, None, None
+
+    patch_composition(monkeypatch, "_build_services", build)
+    deps = vars(setup)["_schedule_run_deps"]([_tool("claude")], _FEDORA)
+    assert callable(deps.notify)
+    assert deps.notify is not no_notifier
+
+
 # --- skipped owners, failures, copilot's cask path and Pi's reviewed update -------------------
 
 
