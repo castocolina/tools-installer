@@ -872,3 +872,19 @@ Plans:
 - the unit tests inspect parsed YAML and text because the test sandbox forbids launching `git` and `gh`: the live behavior of every bot step is proven only by the owner's proof;
 - Dependabot opens pull requests that this repository's flow never merges (the owner lands its branch by fast-forward or closes the pull request).
 **Depends on:** Phase 33.
+
+### Phase 999.34: Daily update check follow-ups (BACKLOG)
+
+**Goal:** The daily update check loses the rough edges the phase 34 reviews accepted or deferred, after the owner has seen real notifications on Bazzite and a Mac.
+**Requirements:** TBD
+**Source:** Phase 34 review disposition `34-REVIEW-DISPOSITION.md`, the plan reviews `34-REVIEWS.md` and the security audit's accepted-risks log `34-SECURITY.md`, accepted or deferred items:
+- the container check's Last-cell comparison reads the clock twice, so a run that crosses midnight can disagree with the driver (`✓ 23:59` against `✓ 1d`); it is orchestrator-run and fails rather than falsely passes;
+- in-flight version refreshes are keyed by the set of tool ids only, so a refresh asked for a short freshness window can join a longer one and its failure callback is not called (the scheduled process builds its own service);
+- the manual `--run-schedule check-updates` route inherits stdin for package-manager queries and reads `settings.json` for post-install hooks before it takes the lock (a FIFO there can block it);
+- the git self-check honors the user's other git configuration (transport and credential settings beyond the ones disabled) and git older than 2.44 ignores the lazy-fetch switch; a clone detected as partial is skipped;
+- uv's own cache and the manager-query scratch writes sit outside installer state (accepted for every schedule row), and proxy values the user configured are carried like for every row;
+- a persistent failure to save the notified set or the version cache makes every run attempt a notification again (stated in the result line, not hidden);
+- Homebrew-owned tools can be under-reported because the query runs with `HOMEBREW_NO_AUTO_UPDATE=1` and the check does not run `brew update`;
+- a login catch-up run can precede the notification daemon, so a notification can arrive a day late;
+- the checkout manifest of the container probe detects path and size changes, not same-size content changes, and the container workspace has no `.git`, so the self-check path is not exercised there.
+**Depends on:** Phase 34.
