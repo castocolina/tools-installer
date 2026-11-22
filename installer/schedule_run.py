@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
-from installer import cursor_shim, runlock, schedules, update_all, update_check
+from installer import cursor_shim, runlock, schedules, update_all, update_all_state, update_check
 from installer.model import Tool
 from installer.notify import Notifier, no_notifier
 from installer.ownership import ManagerOwnership
@@ -20,6 +21,10 @@ from installer.sanitize import sanitize_log_line
 from installer.update import UpdateError, UpdateService, UpdateTarget
 
 _REASON_LIMIT = 300
+
+
+def _local_now() -> datetime:
+    return datetime.now().astimezone()
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,8 @@ class RunDeps:
     notify: Notifier = no_notifier
     refresh: update_check.Refresher | None = None
     git: update_check.GitRunner | None = None
+    # Inject the clock so the calendar day is a test input.
+    now: Callable[[], datetime] = _local_now
 
 
 def _first_line(text: str) -> str:
@@ -47,25 +54,39 @@ def _reason(error: Exception) -> str:
     return _first_line(str(error)) or type(error).__name__
 
 
-def _update(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, int]:
-    tool = next((tool for tool in deps.tools if tool.id == schedule.target), None)
-    if tool is None:
-        return f"failed: {schedule.target} is not in the catalog", 1
+@dataclass(frozen=True)
+class ToolRun:
+    line: str
+    code: int
+    mutated: bool
+
+
+def _update_tool(tool: Tool, deps: RunDeps) -> ToolRun:
     try:
         ownership = deps.resolve_owner(tool)
         before = deps.probe_version(tool, ownership)
         outcome = deps.updates.run(UpdateTarget(tool=tool, ownership=ownership))
+    except (UpdateError, CommandError, OSError) as error:
+        return ToolRun(f"failed: {_reason(error)}", 1, False)
+    try:
         after = (
             deps.probe_version(tool, deps.resolve_owner(tool))
             if outcome.status == "updated"
             else None
         )
     except (UpdateError, CommandError, OSError) as error:
-        return f"failed: {_reason(error)}", 1
+        return ToolRun(f"failed: {_reason(error)}", 1, True)
     line, code = schedules.update_result_line(outcome, before, after)
     if outcome.receipt_warning:
         line += f"; warning: {_first_line(outcome.receipt_warning)}"
-    return line, code
+    return ToolRun(line, code, outcome.mutated)
+
+
+def _update(schedule: schedules.Schedule, deps: RunDeps) -> ToolRun:
+    tool = next((tool for tool in deps.tools if tool.id == schedule.target), None)
+    if tool is None:
+        return ToolRun(f"failed: {schedule.target} is not in the catalog", 1, False)
+    return _update_tool(tool, deps)
 
 
 def _agent_resolves(agent: Path) -> bool:
@@ -112,15 +133,15 @@ def _refresh_cursor_shim(context: schedules.ScheduleContext) -> str:
 
 def _update_cursor_agent(
     schedule: schedules.Schedule, deps: RunDeps, context: schedules.ScheduleContext
-) -> tuple[str, int]:
+) -> ToolRun:
     _link, agent = cursor_shim.shim_paths(context.home)
     if not _agent_resolves(agent):  # SPEC edge R7 empty: nothing is updated or rewritten
-        return "failed: ~/.local/bin/agent is missing or dangling", 1
-    line, code = _update(schedule, deps)
+        return ToolRun("failed: ~/.local/bin/agent is missing or dangling", 1, False)
+    run = _update(schedule, deps)
     try:
-        return line + _refresh_cursor_shim(context), code
+        return ToolRun(run.line + _refresh_cursor_shim(context), run.code, run.mutated)
     except OSError as error:
-        return f"failed: {_reason(error)}", 1
+        return ToolRun(f"failed: {_reason(error)}", 1, run.mutated)
 
 
 def _check(deps: RunDeps) -> tuple[str, int]:
@@ -137,14 +158,39 @@ def _update_all(deps: RunDeps) -> tuple[str, int]:
     return update_all.summary_line(updated=0, skipped=0), 0
 
 
+def _run_update_row(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, int]:
+    context = deps.context
+    healthy = True
+    path = schedules.updated_today_path(context) if context is not None else None
+    if path is not None:
+        entries, healthy = update_all_state.read_updated(path)
+        if (
+            update_all_state.updated_on(entries, deps.now().date()).get(schedule.target or "")
+            == "update-all"
+        ):
+            return "skipped: updated today", 0
+    run = (
+        _update_cursor_agent(schedule, deps, context)
+        if schedule.target == "cursor-agent" and context is not None
+        else _update(schedule, deps)
+    )
+    clauses = [] if healthy else ["updated-today record unreadable"]
+    if path is not None and run.mutated:
+        try:
+            update_all_state.record_updated(
+                path, schedule.target or "", today=deps.now().date(), by=schedule.id
+            )
+        except OSError:
+            clauses.append("updated-today record not saved")
+    return run.line + "".join(f"; {clause}" for clause in clauses), run.code
+
+
 def _run_unlocked(schedule: schedules.Schedule, deps: RunDeps) -> tuple[str, int]:
     if schedule.kind is schedules.JobKind.UPDATE_ALL:
         return _update_all(deps)
     if schedule.kind is schedules.JobKind.CHECK_UPDATES:
         return _check(deps)
-    if schedule.target == "cursor-agent" and deps.context is not None:
-        return _update_cursor_agent(schedule, deps, deps.context)
-    return _update(schedule, deps)
+    return _run_update_row(schedule, deps)
 
 
 def run_schedule(

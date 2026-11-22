@@ -36,6 +36,9 @@ _LOADER_ERROR = re.compile(
 class ExecutorError(RuntimeError):
     """A method could not be turned into a runnable command."""
 
+    # True when failure followed a successful mutating command.
+    after_mutation: bool = False
+
 
 class MethodLeftInstalled(ExecutorError):
     """The method ran and left its package installed, so no later method may install it again."""
@@ -611,7 +614,11 @@ def _node(method: Method, runner: Runner) -> None:
     # alone will still short-circuit on ALREADY_INSTALLED. An update that
     # reuses this executor inherits that same residual.
     if smoke is not None:
-        SMOKE_CHECKS[smoke]("pnpm")
+        try:
+            SMOKE_CHECKS[smoke]("pnpm")
+        except ExecutorError as exc:
+            exc.after_mutation = True
+            raise
 
 
 # The package each declared smoke needs bun to have built, for the trust sentence below.

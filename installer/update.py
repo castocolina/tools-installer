@@ -183,6 +183,7 @@ class UpdateOutcome:
     replayed_globals: tuple[str, ...] = ()
     cleanup_warnings: tuple[str, ...] = ()
     receipt_warning: str | None = None
+    mutated: bool = False
 
 
 def resolve_update_argv(target: UpdateTarget, *, greedy: bool = False) -> list[str] | None:
@@ -259,6 +260,7 @@ def perform_update(
             owner=ownership.owner,
             detail=str(exc),
             errors=(exc,),
+            mutated=isinstance(exc, ExecutorError) and exc.after_mutation,
         )
 
 
@@ -445,7 +447,11 @@ def _perform(
         if isinstance(smoke, str) and smoke in executors.SMOKE_CHECKS:
             # Manager "bun" selects the own-tree loader: a broken bun copy fails here instead of
             # another manager's copy answering for it.
-            executors.SMOKE_CHECKS[smoke]("bun")
+            try:
+                executors.SMOKE_CHECKS[smoke]("bun")
+            except ExecutorError as exc:
+                exc.after_mutation = True
+                raise
     elif owner == "installer":
         cleanup_warnings = _update_installer_owned(
             method,
@@ -487,6 +493,7 @@ def _perform(
         postinstall_warning=warning,
         cleanup_warnings=cleanup_warnings,
         receipt_warning=receipt_warning,
+        mutated=True,
     )
 
 
