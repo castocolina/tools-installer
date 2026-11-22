@@ -8,7 +8,13 @@ import pytest
 
 from installer import schedules
 from installer.model import Method, Tool
+from installer.notify import Notifier
+from installer.ownership import ManagerOwnership
+from installer.platform import Platform
 from installer.run import CommandError
+from installer.schedule_run import RunDeps
+from installer.update import UpdateService
+from installer.update_check import GitRunner, Refresher
 from installer.version_cache import VersionCacheEntry, save_version_cache
 from installer.version_status import FailureSink, ToolState, VersionStatus
 from tests.state_doubles import MACOS, pass_state
@@ -59,6 +65,52 @@ def check_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> schedules.
     monkeypatch.setenv("HOME", str(tmp_path))
     return schedules.context_for(
         "fedora", checkout=tmp_path / "co", read_models=lambda _agent: None
+    )
+
+
+def inert_run_deps(
+    tools: Sequence[Tool],
+    context: schedules.ScheduleContext,
+    *,
+    notify: Notifier,
+    refresh: Refresher,
+    git: GitRunner,
+) -> RunDeps:
+    def ownership(tool: Tool) -> ManagerOwnership:
+        return ManagerOwnership(
+            tool_id=tool.id,
+            owner="unknown",
+            method=tool.methods[0],
+            package=None,
+            current_version=None,
+            confidence="direct",
+            shadowed=False,
+            candidates=(),
+            active_candidate=None,
+            active_path=None,
+            unknown_reason=None,
+        )
+
+    def no_run(cmd: list[str]) -> None:
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    updates = UpdateService(
+        platform=Platform(os="fedora", arch="amd64", immutable=False, has_brew=False),
+        runner=no_run,
+        resolve_tag=lambda _repo: "v1.0.0",
+        managed_packages=lambda: (),
+        replay_globals=lambda _packages: (),
+        reresolve_ownership=ownership,
+    )
+    return RunDeps(
+        tools=tools,
+        updates=updates,
+        resolve_owner=ownership,
+        probe_version=lambda _tool, _own: None,
+        context=context,
+        notify=notify,
+        refresh=refresh,
+        git=git,
     )
 
 

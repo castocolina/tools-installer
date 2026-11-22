@@ -1179,7 +1179,14 @@ ESCALATION = re.compile(r"\b(sudo|pkexec|doas)\b")
 
 def test_new_modules_name_no_privilege_escalation() -> None:
     package = Path(schedules.__file__).parent
-    names = ["schedules.py", "runlock.py", "cursor_shim.py", "helper_assets/schedule_runner.py"]
+    names = [
+        "schedules.py",
+        "runlock.py",
+        "cursor_shim.py",
+        "helper_assets/schedule_runner.py",
+        "notify.py",
+        "update_check.py",
+    ]
     if (package / "schedule_run.py").exists():
         names.append("schedule_run.py")
     for name in names:
