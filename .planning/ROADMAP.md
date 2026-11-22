@@ -197,7 +197,7 @@ Plans:
   3. The Herdr desktop app is a catalog entry distinct from `herdr`: a user-scope `install.sh` with no sudo on Linux and the cask on Apple Silicon macOS (unavailable on Intel macOS); installing or removing one entry leaves the other's binaries and `~/.config/herdr` intact.
   4. The Herdr desktop app's keys files meet the defaults on both OSes; on Linux Ctrl+Shift+K clears and the displaced picker binding is named in the install note, and a binding the user defined is kept and reported as `partial: kept yours`.
 
-**Plans:** 8 plans
+**Plans:** 9 plans
 
 Plans:
 **Wave 1**
@@ -326,25 +326,28 @@ Plans:
 - [ ] 34-01-PLAN.md — The eighth Schedules row: `JobKind.CHECK_UPDATES`, the `Schedule.daily` flag replacing the seven hard-coded "tmp cleanup is daily" checks, the `check-updates` row (daily 09:00, on by default) with its runner argv, the notified-set path in the swept state artifacts, table `max-height: 9`, and the 29 existing tests the row forces, each edited under a stated rule, none weakened (NOTIFY-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 34-02-PLAN.md — `installer/notify.py` (the `Notifier` seam, `notify-send` and `osascript` argv builders, the session-bus rule with its runtime-directory fallback, one-line skip reasons, the caller contract), the runner passing `DBUS_SESSION_BUS_ADDRESS`, `RunDeps.notify` with a safe default and the `setup` wiring (NOTIFY-04, NOTIFY-05)
+- [ ] 34-02-PLAN.md — `installer/notify.py` (the `Notifier` seam, `notify-send` and `osascript` argv builders, the session-bus rule with its runtime-directory fallback and raising-probe skip, one-line skip reasons with a fixed reason by exit code instead of the argv, C1-clean `reason_line`, the caller contract), the runner passing `DBUS_SESSION_BUS_ADDRESS`, `RunDeps.notify` with a safe default and the `setup` wiring (NOTIFY-04, NOTIFY-05)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 34-03-PLAN.md — The refresh path's per-call `stale_after` window and failure sink (no resolver wrapping, digests kept), `VersionRefreshService.cache_path` and the pure `outdated_ids(states)` phase 35 reuses (NOTIFY-02, NOTIFY-03)
+- [ ] 34-03-PLAN.md — The refresh path's per-call `stale_after` window and failure sink (no resolver wrapping, digests kept, a real-service budget test), `VersionRefreshService.cache_path`, the pure `outdated_ids(states)` phase 35 reuses, and the version cache's `attempted_at`, invalid-UTF-8 tolerance and link-safe writer (NOTIFY-02, NOTIFY-03)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 34-04-PLAN.md — `installer/update_check.py`: the installer self-check over an isolated read-only git (`run_git_isolated` keywords), fixed failure categories only, the notified set `update-check.json` written with a link-safe writer and the changed-set rule, last-attempt-first order, the notification text and the one `ok: N updates available` result line fitted to the runner's 300-character cap with its `; ` clauses including `installer behind origin/main`; the one plan that leaves the strict reachability guard red, for exactly `installer.update_check` (NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-06)
+- [ ] 34-04-PLAN.md — `installer/update_check.py` in three tasks: the installer self-check over an isolated read-only git with credential helpers and lazy fetch disabled and fixed failure categories only; the strictly read, link-safe notified set `update-check.json`, `next_set` (an unknown status keeps its prior membership) and the result line fitted to the runner's 300-character cap; last-attempt-first order and `run_check` with its `; ` clauses including `installer behind origin/main`; the one plan that leaves the strict reachability guard red, for exactly `installer.update_check` (NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-06)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 34-05-PLAN.md — The runner's `check-updates` job and kind-aware timeout wording, the `--run-schedule` choice, `run_schedule` dispatch by kind through the shared lock branches, defaulted `RunDeps.refresh` and `RunDeps.git` and the `setup` wiring, closed stdin for every runner child, the real-runner-log composition test and the real-service allowed-writes test; clears the reachability guard (NOTIFY-01)
+- [ ] 34-05-PLAN.md — `run_schedule` dispatch by kind through the shared lock branches, the `--run-schedule` choice, defaulted `RunDeps.refresh` and `RunDeps.git` and the `setup` wiring (its first commit clears the reachability guard); then the runner's `check-updates` job through a `--frozen` child with kind-aware timeout wording, closed stdin for every child, the real-runner-log composition tests (control characters, a silently failing macOS notifier) (NOTIFY-01)
 
 **Wave 6** *(blocked on Wave 5 completion)*
-- [ ] 34-06-PLAN.md — The check row's target, what-text, notifier line, the one-time Script Editor permission as the first detail line (checked in the rendered 80x20 panel) and the limits line in the Schedules view, the Phase 34 subsection of `.claude/architecture.md` with its pinning test, and the dated amendment of success criterion 5 (NOTIFY-01, NOTIFY-03, NOTIFY-05)
+- [ ] 34-06-PLAN.md — The check row's target, what-text, notifier line, the one-time Script Editor permission as the first detail line, a short `limits:` line before `last:` and the long limits after `times:` (checked in the rendered 80x20 and 120x40 panels), the Phase 34 subsection of `.claude/architecture.md` with its pinning test, and the dated amendments of the ROADMAP and `34-SPEC.md` (daily limit, logging wording, criterion 5) (NOTIFY-01, NOTIFY-03, NOTIFY-05)
 
 **Wave 7** *(blocked on Wave 6 completion)*
-- [ ] 34-07-PLAN.md — The `check-updates` pair in the `schedules` container target with a strict `ok: N updates available` verdict on both routes (orchestrator-run only) and its host tests (NOTIFY-01)
+- [ ] 34-07-PLAN.md — The `check-updates` pair in the `schedules` container target with a strict verdict tied to the launch on both routes (a new start and `ok: N updates available` pair, the launch status, the Last cell against the new result; a stale success and a standalone busy result fail; orchestrator-run only) and its host tests (NOTIFY-01)
 
 **Wave 8** *(blocked on Wave 7 completion)*
-- [ ] 34-08-PLAN.md — Cross-file consistency tests (every row's runner argv parses, the phase 35 contract including the `Notifier` seam, the runner environment pinned by equality, the new modules' hard rules) and the phase-final `make validate` and `make test` (NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-04, NOTIFY-05, NOTIFY-06)
+- [ ] 34-08-PLAN.md — Cross-file consistency tests (every row's runner argv parses, the phase 35 contract including the `Notifier` seam, the runner environment pinned by equality, the new modules' hard rules) the `Notifier` typed-fake call list asserted whole, and this plan's `make validate` and `make test` (NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-04, NOTIFY-05, NOTIFY-06)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+- [ ] 34-09-PLAN.md — The hermetic check job through `setup.main` (real parser, wiring, dispatch, a real refresh service, a real notifier over a fake binary and the real runner log) with its named allowed writes, receipts inside the snapshot, an untouched checkout and a replaced `versions.json` symlink; the phase's last `make validate` and `make test` (NOTIFY-01)
 
 ### Phase 35: Opt-in auto-update, package managers first
 
