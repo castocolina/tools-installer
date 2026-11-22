@@ -930,3 +930,19 @@ Plans:
 - **Needs an owner decision at planning time:** a written amendment of the `AGENTS.md` rule "real installs and removals run only in disposable containers" that names hosted CI runners as disposable hosts; whether the workflow may use the repository token for the `gh` extension; the runner cost and time budget.
 - **Stays manual on an Intel Mac** (one consolidated checklist file, `docs/macos-uat-checklist.txt`, built from the per-phase UAT lines and tested like the proof runbook): iTerm2 loading the Dynamic Profile live and becoming the default, Cmd+K and Option word moves, the colors, the uninstall restore from inside iTerm2; Ghostty, kitty and WezTerm key rules in the running app; the Herdr app cask; a real notification and the Script Editor permission prompt; the daily timer firing under launchd.
 **Depends on:** Phase 35 (the last phase of the milestone), and the owner's decision above.
+
+### Phase 999.36: Opt-in auto-update follow-ups (BACKLOG)
+
+**Goal:** Close the accepted or deferred items of phase 35 when the owner decides.
+**Requirements:** TBD
+**Source:** Phase 35 review disposition `35-REVIEW-DISPOSITION.md`, the plan reviews `35-REVIEWS.md` and the accepted risks of `35-SECURITY.md`:
+- record the daily entry when the primary mutation is known, before slow follow-ups (a mutation just before midnight is recorded against the next day; an interrupt during follow-ups leaves it unrecorded and allows a repeated, idempotent update);
+- the update-all log shows the last run that reached tool execution: label it so on the screen or start the log before the first refresh;
+- the owner's UI decision for the detail pane at 80x20 (the `limits:` and `log:` lines, including the vendor-updaters-may-edit-shell-files limit, show only at 100x30; make the pane scrollable or focusable);
+- the log append's regular-file check accepts a hard link replaced by the same user (same-user residual like the lock);
+- the container target's fixed transcript path (serialize or use a run-specific path);
+- the runner's root refusal writes stderr only (no schedule-log line); a dangling `agent` link fails cursor-agent before the guard; the version probe runs the tool's binary before the guard (inherited per-tool behavior);
+- `_update_all` is about 160 lines with a closure over five nonlocals and classifies results by message prefix (a refactor);
+- accepted limits stated in the docs: vendor updaters that start their own session, the same-user advisory-lock residual, the pnpm replay and grouped package effects counted as planned tools only, a manager upgrade touching its own dependents, uncapped output capture, an uncredential-scrubbed 0600 run log, the first night's real outdated set;
+- the AUTOUPD-08 real run is on record in a disposable Fedora container (uv 0.11.0 to 0.13.9 through the real `uv run` chain, ruff 0.1.0 to 0.17.6, shell rc unchanged, the same-day rerun skipped); macOS, a real Bazzite host, a real desktop notification and the 03:00 timer remain owner UAT.
+**Depends on:** Phase 35.
