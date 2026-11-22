@@ -297,11 +297,11 @@ def run_rpc(
             finally:
                 with contextlib.suppress(BrokenPipeError):
                     process.stdin.close()
-                with contextlib.suppress(ProcessLookupError):
+                with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.killpg(process.pid, signal.SIGTERM)
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=0.2)
-                with contextlib.suppress(ProcessLookupError):
+                with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
         return RpcResult(True, tuple(replies), errpath.read_text(errors="replace")[-4000:])

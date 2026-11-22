@@ -2521,7 +2521,7 @@ schedules_expected_cell() {
 schedules_mark_checkout() {
   local workspace
   printf -v workspace '%q' "$TESTER_WORKSPACE"
-  SCHEDULES_CHECKOUT_COMMAND="set -o pipefail; find $workspace \\( -name .git -o -name .venv \\) -prune -o -type f -printf '%p %s\\n' | LC_ALL=C sort"
+  SCHEDULES_CHECKOUT_COMMAND="set -o pipefail; find $workspace \\( -name .git -o -name .venv \\) -prune -o -type f -exec sh -c 'for f do printf \"%s %s\\n\" \"\$f\" \"\$(wc -c < \"\$f\" | tr -d \" \")\"; done' sh {} + | LC_ALL=C sort"
   if ! SCHEDULES_CHECKOUT_BASELINE="$(schedules_tester "$SCHEDULES_CHECKOUT_COMMAND")"; then
     printf 'TRACER_SCHEDULE_CHECKOUT_PROBE_FAILED\n'
     return 1
