@@ -373,31 +373,31 @@ Plans:
 - [ ] 35-01-PLAN.md — The ninth Schedules row end to end: `JobKind.UPDATE_ALL`, the per-row `default_on` (the row seeds OFF and is never re-enabled), the `update-all` row (daily 03:00), the runner job under a 3 h bound with the child answering `ok: 0 updated` (tracer: hermetic runner to real `setup.main`), the two swept state-file names, the one `summary_line` shape, the Schedules screen row with table height 10, and the closed-table pin edits the row forces (AUTOUPD-01, AUTOUPD-06)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 35-02-PLAN.md — The pure planner `installer/update_all.py`: managers first by ownership edges, dependents grouped by owner and ordered by `resolve_dependencies`, outdated-only, `cask excluded`, exact refusal texts, `no unattended update path` by one generic rule (the eight tools pinned), `updated today`, `blocking_manager`, the plan strings (AUTOUPD-02, AUTOUPD-03, AUTOUPD-04, AUTOUPD-05)
+- [ ] 35-02-PLAN.md — The pure planner `installer/update_all.py` (no IO: the caller supplies the refusal evidence): managers first by ownership edges with ownership and `requires` cycles skipped, dependents grouped by owner and ordered by `resolve_dependencies`, outdated-and-confirmed-only, one shared `exclusion` predicate (`cask excluded`, exact refusal texts, `no unattended update path` by one generic rule with the eight tools pinned), `updated today`, `blocking_manager`, the plan strings (AUTOUPD-02, AUTOUPD-03, AUTOUPD-04, AUTOUPD-05)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 35-03-PLAN.md — `installer/update_all_state.py`: the strict, link-safe `updated-today.json` record and `update-all.log` writer, and the per-tool rows skipping what `update-all` updated today and recording what they updated (AUTOUPD-06, AUTOUPD-07)
+- [ ] 35-03-PLAN.md — `installer/update_all_state.py`: the strict, type-checked, link-safe `updated-today.json` record, the per-tool rows skipping what `update-all` updated today and recording every tool they mutated (a structured `ToolRun`, degraded records named in the line), then the link-safe non-blocking `update-all.log` writer (AUTOUPD-06, AUTOUPD-07)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 35-04-PLAN.md — The update-all executor: two refresh passes, the failure set (a failed manager's dependents skipped with one line and no call), one run-log line per tool, the record, the summary with `unchanged`, and the hermetic three-tool run through the real runner and `setup.main` (AUTOUPD-03, AUTOUPD-04, AUTOUPD-06, AUTOUPD-07)
+- [ ] 35-04-PLAN.md — The update-all executor: two refresh passes on confirmed evidence only, a guard inside `UpdateService.run` that judges the fresh ownership (cask, refusal, no update path, a failed manager's dependents skipped with one line and zero argv, proven with a real service), one run-log line per tool, the record from every mutation, the summary with `unchanged`, and the hermetic three-tool run through the real runner and `setup.main` (AUTOUPD-03, AUTOUPD-04, AUTOUPD-06, AUTOUPD-07)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 35-05-PLAN.md — The bounded, sanitized update-all runner (1200 s per command, closed stdin, `HOMEBREW_NO_SUDO`, `UV_NO_MODIFY_PATH`) wired for update-all only, the refusal matrix, the held-lock backstop and the no-sudo AST guard (AUTOUPD-04)
+- [ ] 35-05-PLAN.md — The bounded, sanitized update-all runner (1200 s per command, closed stdin, `HOMEBREW_NO_SUDO`, `UV_NO_MODIFY_PATH`) wired for update-all only with the pnpm replay and the herdr reload injected and the other runner sites named as the accepted residual (a descendant test), the refusal to run as root, the refusal matrix, the held-lock backstop through the CLI and the no-sudo AST regression check (AUTOUPD-04)
 
 **Wave 6** *(blocked on Wave 5 completion)*
-- [ ] 35-06-PLAN.md — Plan-only mode `--run-schedule update-all --plan` from the one planner through `hold_writes` (no installer state written, proven with the real refresh service), usage errors, and the dated SPEC R9 amendment (AUTOUPD-01, AUTOUPD-02)
+- [ ] 35-06-PLAN.md — Plan-only mode `--run-schedule update-all --plan` from the one planner through `hold_writes` (no installer state written, proven with the real refresh service with receipts inside the snapshot and caches aged past the preview window), a note on every plan that explains the preview's evidence limit, usage errors, and the dated SPEC R9 amendment (AUTOUPD-01, AUTOUPD-02)
 
 **Wave 7** *(blocked on Wave 6 completion)*
-- [ ] 35-07-PLAN.md — One notification with counts and ids only after a run that updated or failed something, the `notify skipped` clause, the bus address for the update-all child, and the dated SPEC R10 amendment (AUTOUPD-06)
+- [ ] 35-07-PLAN.md — One notification with counts and ids only after a run that updated or failed something (delivery proven through the real adapter and a scratch notify-send), the `notify skipped` clause normalized at the result boundary, the bus address for the update-all child, and the dated SPEC R10 amendment (AUTOUPD-06)
 
 **Wave 8** *(blocked on Wave 7 completion)*
-- [ ] 35-08-PLAN.md — The update-all detail lines on the screen, the Phase 35 architecture subsection with every accepted limit pinned by `tests/test_docs.py`, and the dated SPEC, ROADMAP and REQUIREMENTS amendments (AUTOUPD-01, AUTOUPD-02, AUTOUPD-04, AUTOUPD-07)
+- [ ] 35-08-PLAN.md — The update-all detail lines on the screen (a copyable preview command visible at 80x20), the Phase 35 architecture subsection with every accepted limit pinned by `tests/test_docs.py`, and the dated SPEC, ROADMAP and REQUIREMENTS amendments (AUTOUPD-01, AUTOUPD-02, AUTOUPD-04, AUTOUPD-07)
 
 **Wave 9** *(blocked on Wave 8 completion)*
-- [ ] 35-09-PLAN.md — The orchestrator-run `update-all` container target with its in-container driver (the uv line must say would update, the real `uv run` chain with a real `uv self update`, the rc-file finding, the same-day rerun), its static pins and the renumbered PATH lines (AUTOUPD-08)
+- [ ] 35-09-PLAN.md — The orchestrator-run `update-all` container target with its in-container driver (an older uv and an upgradeable older ruff seeded, the uv line must say would update, the real `uv run` chain with a real `uv self update` that must change the version and the executable, the rc-file finding, the same-day rerun, steps that stop at the first failure), its static pins and the renumbered PATH lines; the real run, not a green suite, closes AUTOUPD-08 (AUTOUPD-08)
 
 **Wave 10** *(blocked on Wave 9 completion)*
-- [ ] 35-10-PLAN.md — Cross-file consistency tests (plan equals run through `setup.main`, every closed list knows the row, wiring, the worst-case summary budget) and the phase's last `make validate` and `make test` (AUTOUPD-01 to AUTOUPD-08)
+- [ ] 35-10-PLAN.md — Cross-file consistency tests (plan equals run through the `setup.main` dispatch, the real composition with an actual lock, every closed list knows the row, wiring, the worst-case summary budget with every clause) and the phase's last `make validate` and `make test` as a pair on the final tree (AUTOUPD-01 to AUTOUPD-08)
 
 ## Progress
 
