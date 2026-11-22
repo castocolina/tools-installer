@@ -153,10 +153,11 @@ def test_the_hermetic_check_job_changes_only_the_allowed_files(
     result = json.loads((tmp_path / "result.json").read_text())
     assert result["code"] == 0 and result["bytecode"] == "1"
     assert not result["github_token"] and not result["gh_token"] and result["runs"] == []
-    assert len(result["git"]) == 3
+    assert len(result["git"]) == 4
     assert all(argv[:3] == ["git", "-C", str(checkout.resolve())] for argv in result["git"])
     assert [argv[3:] for argv in result["git"]] == [
         ["rev-parse", "--abbrev-ref", "HEAD"],
+        ["rev-parse", "--show-toplevel"],
         ["rev-parse", "HEAD"],
         ["ls-remote", "origin", "refs/heads/main"],
     ]

@@ -271,6 +271,76 @@ OBJECT = ("cat-file", "-e", SHA_B)
 ANCESTOR = ("merge-base", "--is-ancestor", SHA_B, "HEAD")
 
 
+TOPLEVEL = ("rev-parse", "--show-toplevel")
+CONFIG = ("config", "--get-regexp", r"^(extensions\.partialclone|remote\..*\.promisor)$")
+
+
+def test_the_hardened_self_check_issues_only_read_only_subcommands(tmp_path: Path) -> None:
+    (tmp_path / "file").write_bytes(b"content")
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    for behind, expected in (
+        (True, ["rev-parse", "rev-parse", "rev-parse", "ls-remote", "config", "cat-file"]),
+        (False, ["rev-parse", "rev-parse", "rev-parse", "ls-remote"]),
+    ):
+        git = FakeGit(behind=behind)
+        assert update_check.installer_behind(tmp_path, git) == (behind, None)
+        commands = [call[3] for call in git.calls]
+        assert commands == expected
+        assert set(commands) <= {"rev-parse", "ls-remote", "cat-file", "merge-base", "config"}
+        assert not set(commands) & {"fetch", "pull", "checkout", "merge", "reset", "clone"}
+    after = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert after == before
+
+
+def test_a_checkout_that_is_not_its_own_worktree_root_is_skipped(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    git = FakeGit(toplevel=tmp_path)
+    assert update_check.installer_behind(checkout, git) == (False, "not the checkout root")
+    assert [tuple(call[3:]) for call in git.calls] == [BRANCH, TOPLEVEL]
+    link = tmp_path / "link"
+    link.symlink_to(checkout, target_is_directory=True)
+    assert update_check.installer_behind(checkout, FakeGit(toplevel=link)) == (True, None)
+    git = FakeGit()
+    git.answers[TOPLEVEL] = CommandError(list(TOPLEVEL), 128)
+    assert update_check.installer_behind(checkout, git) == (False, "not a git checkout")
+
+
+def test_a_partial_clone_skips_the_object_queries(tmp_path: Path) -> None:
+    git = FakeGit(partial=True)
+    assert update_check.installer_behind(tmp_path, git) == (False, "partial clone")
+    assert all(call[3] not in {"cat-file", "merge-base"} for call in git.calls)
+    equal = FakeGit(partial=True, behind=False)
+    assert update_check.installer_behind(tmp_path, equal) == (False, None)
+    assert all(call[3] != "config" for call in equal.calls)
+    for code, reason in ((128, "git query failed"), (124, "git query timed out")):
+        failing = FakeGit()
+        failing.answers[CONFIG] = CommandError(list(CONFIG), code)
+        assert update_check.installer_behind(tmp_path, failing) == (False, reason)
+
+
+def test_the_skip_reasons_are_the_nine_fixed_strings(tmp_path: Path) -> None:
+    assert {
+        "not a git checkout",
+        "git not found",
+        "git query timed out",
+        "git query failed",
+        "origin query failed",
+        "origin has no main branch",
+        "origin returned an unexpected answer",
+        "not the checkout root",
+        "partial clone",
+    } == update_check.SKIP_REASONS
+    url = "https://user:ghp_planted_value@example.test/r.git"
+    for query in (TOPLEVEL, CONFIG):
+        git = FakeGit()
+        git.answers[query] = CommandError([url], 128, detail=url)
+        behind, reason = update_check.installer_behind(tmp_path, git)
+        assert not behind and reason in update_check.SKIP_REASONS
+        assert reason is not None
+        assert all(secret not in reason for secret in ("ghp_planted_value", "user:", "https://"))
+
+
 def test_a_checkout_behind_main_reports_behind(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "config").write_bytes(b"config")
@@ -399,6 +469,65 @@ def test_sha256_remote_is_accepted(tmp_path: Path) -> None:
     git.answers[("cat-file", "-e", sha)] = CommandError([], 1)
     assert update_check.installer_behind(tmp_path, git) == (True, None)
     assert git.calls[-1][3:] == ["cat-file", "-e", sha]
+
+
+def test_tools_are_refreshed_oldest_attempt_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 11, 22, tzinfo=UTC)
+    ctx = check_context(tmp_path, monkeypatch)
+    tools = [tool_named(c) for c in "abcdef"]
+    entries = {
+        "a": VersionCacheEntry("2", (now - timedelta(hours=1)).isoformat()),
+        "b": VersionCacheEntry("2", (now - timedelta(days=2)).isoformat()),
+        "d": VersionCacheEntry("2", "invalid"),
+        "e": VersionCacheEntry("2", "2026-11-01T00:00:00"),
+        "f": VersionCacheEntry("2", (now + timedelta(days=10)).isoformat()),
+    }
+
+    def check_order(
+        names: list[str], cache: dict[str, VersionCacheEntry], expected: list[str]
+    ) -> None:
+        selected = [tool_named(name) for name in names]
+        refresh = FakeRefresher(tmp_path / "cache", {}, seed_cache=cache, clock=lambda: now)
+        line, code = update_check.run_check(
+            selected,
+            refresh=refresh,
+            notify=FakeNotifier(),
+            context=ctx,
+            git=FakeGit(branch="feature"),
+            clock=lambda: now,
+        )
+        assert code == 0 and line.startswith("ok:")
+        assert [tool.id for tool in refresh.calls[0][0]] == expected
+
+    check_order([t.id for t in tools], entries, list("cdefba"))
+    entries["c"] = VersionCacheEntry(
+        "2", (now - timedelta(days=10)).isoformat(), (now - timedelta(days=1)).isoformat()
+    )
+    check_order(list("abc"), entries, list("bca"))
+    names = [f"tool-{i:02d}" for i in range(25)]
+    failures = {
+        name: VersionCacheEntry(
+            "2", (now - timedelta(days=10)).isoformat(), (now - timedelta(hours=7)).isoformat()
+        )
+        for name in names[:20]
+    }
+    check_order(names, failures, names[20:] + names[:20])
+    check_order(list("cba"), {}, list("cba"))
+
+
+def test_an_invalid_utf8_version_cache_before_the_refresh_does_not_crash_the_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = check_context(tmp_path, monkeypatch)
+    tools = [tool_named(c) for c in "cba"]
+    refresh = FakeRefresher(tmp_path / "cache", {}, seed_cache=b"\xff\xfe{")
+    line, code = update_check.run_check(
+        tools, refresh=refresh, notify=FakeNotifier(), context=ctx, git=FakeGit(branch="feature")
+    )
+    assert code == 0 and line.startswith("ok:")
+    assert refresh.calls[0][0] == tuple(tools)
 
 
 def test_the_result_line_counts_outdated_tools_and_changes_nothing(

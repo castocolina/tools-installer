@@ -126,7 +126,13 @@ class FakeRefresher:
         stamped: Collection[str] | None = None,
         corrupt_cache: bytes | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        seed_cache: Mapping[str, VersionCacheEntry] | bytes | None = None,
     ) -> None:
+        if isinstance(seed_cache, bytes):
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(seed_cache)
+        elif seed_cache is not None:
+            save_version_cache(cache_path, seed_cache)
         self.cache_path = cache_path
         self.states = dict(states)
         self.failures = failures
@@ -172,9 +178,17 @@ SHA_B = "b" * 40
 
 
 class FakeGit:
-    def __init__(self, branch: str = "main", behind: bool = True) -> None:
+    def __init__(
+        self,
+        branch: str = "main",
+        behind: bool = True,
+        toplevel: Path | None = None,
+        partial: bool = False,
+    ) -> None:
         self.branch = branch
         self.behind = behind
+        self.toplevel = toplevel
+        self.partial = partial
         self.calls: list[list[str]] = []
         self.answers: dict[tuple[str, ...], str | CommandError] = {}
 
@@ -188,6 +202,12 @@ class FakeGit:
             return answer
         if args == ("rev-parse", "--abbrev-ref", "HEAD"):
             return self.branch + "\n"
+        if args == ("rev-parse", "--show-toplevel"):
+            return str(self.toplevel if self.toplevel is not None else argv[2]) + "\n"
+        if args == ("config", "--get-regexp", r"^(extensions\.partialclone|remote\..*\.promisor)$"):
+            if self.partial:
+                return "extensions.partialclone origin\n"
+            raise CommandError(argv, 1)
         if args == ("rev-parse", "HEAD"):
             return SHA_A + "\n"
         if args == ("ls-remote", "origin", "refs/heads/main"):

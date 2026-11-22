@@ -3,14 +3,16 @@
 Git failures are reported as fixed categories only. The production runner disables hooks,
 prompts, askpass and credential helpers, and lazy fetch (Git 2.44 or newer); older Git may
 ignore the lazy-fetch setting. GIT_SSH_COMMAND outranks core.sshCommand. The user's and the
-repository's other Git configuration remains in effect.
+repository's other Git configuration remains in effect. A checkout that is not its own
+worktree root is skipped to avoid querying a surrounding repository's origin. A partial clone
+is skipped before object queries because older Git may ignore the lazy-fetch setting.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol, cast
@@ -21,7 +23,13 @@ from installer.locations import ensure_dir
 from installer.model import TOOL_ID_RE, Tool
 from installer.notify import Notifier, reason_line
 from installer.run import TIMEOUT_CODE, CommandError, command_error_line, run_git_isolated
-from installer.version_cache import load_manager_snapshot, load_version_cache, stamp_time
+from installer.version_cache import (
+    VersionCacheEntry,
+    attempted_at,
+    load_manager_snapshot,
+    load_version_cache,
+    stamp_time,
+)
 from installer.version_status import FailureSink, Health, ToolState, outdated_ids
 
 # Under 24 hours meets the schedule boundary without repeating a recent TUI fetch.
@@ -52,6 +60,8 @@ _SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 SKIP_REASONS = frozenset(
     {
         "not a git checkout",
+        "not the checkout root",
+        "partial clone",
         "git not found",
         "git query timed out",
         "git query failed",
@@ -208,6 +218,18 @@ def result_line(count: int, clauses: Sequence[tuple[str, str]]) -> str:
     )
 
 
+def oldest_checked_first(
+    tools: Sequence[Tool], cache: Mapping[str, VersionCacheEntry], *, now: datetime
+) -> list[Tool]:
+    """Put oldest attempts first so recently failed tools rotate to the back."""
+    return sorted(
+        tools,
+        key=lambda tool: (
+            attempted_at(cache.get(tool.id), now=now) or datetime.min.replace(tzinfo=UTC)
+        ),
+    )
+
+
 def run_check(
     tools: Sequence[Tool],
     *,
@@ -218,13 +240,18 @@ def run_check(
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> tuple[str, int]:
     started = clock()
+    cache = load_version_cache(refresh.cache_path)
     failures: list[str] = []
 
     def on_failure(_tool_id: str, reason: str) -> None:
         failures.append(reason)
 
     try:
-        refresh.refresh(tools, stale_after=CHECK_STALE_AFTER, on_failure=on_failure)
+        refresh.refresh(
+            oldest_checked_first(tools, cache, now=started),
+            stale_after=CHECK_STALE_AFTER,
+            on_failure=on_failure,
+        )
     except (CommandError, OSError) as exc:
         return f"failed: {failed_reason(exc)}", 1
 
@@ -270,6 +297,12 @@ def installer_behind(checkout: Path, git: GitRunner) -> tuple[bool, str | None]:
     if branch != "main":
         return False, None
     try:
+        toplevel = git([*base, "rev-parse", "--show-toplevel"]).strip()
+    except CommandError as exc:
+        return False, _failure_category(exc, "not a git checkout")
+    if Path(toplevel).resolve() != checkout.resolve():
+        return False, "not the checkout root"
+    try:
         head = git([*base, "rev-parse", "HEAD"]).strip()
     except CommandError as exc:
         return False, _failure_category(exc, "git query failed")
@@ -291,6 +324,16 @@ def installer_behind(checkout: Path, git: GitRunner) -> tuple[bool, str | None]:
         return False, "origin returned an unexpected answer"
     if sha == head:
         return False, None
+    try:
+        partial = git(
+            [*base, "config", "--get-regexp", r"^(extensions\.partialclone|remote\..*\.promisor)$"]
+        )
+    except CommandError as exc:
+        if exc.returncode != 1:
+            return False, _failure_category(exc, "git query failed")
+    else:
+        if partial:
+            return False, "partial clone"
     try:
         git([*base, "cat-file", "-e", sha])
     except CommandError as exc:
