@@ -190,6 +190,22 @@ Usage: container-e2e-verify.sh <command> [--distro fedora|debian|arch] [options]
                           TRACER_PLAYWRIGHT_REMOVE_OK, then TRACER_LANDING_TEARDOWN_OK.
                           TRACER_PLAYWRIGHT_LAUNCH_UNPROVEN is environmental, retried by the
                           orchestrator and never a pass.
+  update-all [--keep-image]
+                          Orchestrator only: PID-named Fedora box tools-installer-e2e-update-all-<pid>
+                          regardless of --distro, bootstrapped like audit-landing. The installer plans,
+                          seeds older standalone uv and upgradeable older ruff, then runs the real uv run
+                          chain and identified uv self update route and a same-day rerun. Steps stop on
+                          failure. TRACER_UPDATE_ALL_PLAN_MANAGERS_OK, TRACER_UPDATE_ALL_SEED_OK,
+                          TRACER_UPDATE_ALL_SEED_PREREQ, TRACER_UPDATE_ALL_ROUTE_OK, TRACER_UPDATE_ALL_PLAN_OK,
+                          TRACER_UPDATE_ALL_UV_SELF_UPDATE_OK, TRACER_UPDATE_ALL_DEPENDENT_OK,
+                          TRACER_UPDATE_ALL_RC_FINDING, TRACER_UPDATE_ALL_MANAGER_FINDING,
+                          TRACER_UPDATE_ALL_RUN_OK, TRACER_UPDATE_ALL_AGAIN_OK and
+                          TRACER_UPDATE_ALL_STEP_SKIPPED record results. TRACER_UPDATE_ALL_UV_UNPROVEN,
+                          TRACER_UPDATE_ALL_UV_SELF_UPDATE_UNPROVEN, TRACER_UPDATE_ALL_DEPENDENT_UNPROVEN,
+                          TRACER_UPDATE_ALL_MANAGER_UNPROVEN and TRACER_UPDATE_ALL_AGAIN_UNPROVEN never pass.
+                          TRACER_LANDING_INFEASIBLE step=... is an environment failure (exit 2).
+                          .e2e-artifacts/container-update-all/update-all-transcript.log ends with
+                          TRACER_LANDING_TEARDOWN_OK when teardown succeeds.
   -h, --help              Show this help
 
 Never allocates a pseudo-TTY on exec (no -it/-t) so sys.stdin.isatty() is
@@ -3419,6 +3435,48 @@ cmd_playwright_mcp() {
   return "$failed"
 }
 
+update_all_exit() {
+  local rc=$? step
+  set +e
+  for step in plan-managers seed plan run again; do
+    case " ${started:-} " in
+      *" $step "*) ;;
+      *) { printf 'TRACER_UPDATE_ALL_STEP_SKIPPED step=%s\n' "$step" >>"$LANDING_TRANSCRIPT"; } 2>/dev/null || true ;;
+    esac
+  done
+  (exit "$rc"); landing_teardown
+}
+
+cmd_update_all() {
+  local failed=0 step
+  started=
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-image) LANDING_KEEP_IMAGE=1 ;;
+      *) die "unknown update-all option: $1" ;;
+    esac
+    shift
+  done
+  LANDING_CONTAINER_NAME="tools-installer-e2e-update-all-$$"
+  CONTAINER_NAME="$LANDING_CONTAINER_NAME"
+  IMAGE="$LANDING_IMAGE"
+  DISTRO=fedora
+  LANDING_DRIVER_MODULE=tests.e2e_update_all_driver
+  PHASE_DIR="$REPO_ROOT/.e2e-artifacts/container-update-all"
+  LANDING_TRANSCRIPT="$PHASE_DIR/update-all-transcript.log"
+  trap update_all_exit EXIT
+  ensure_phase_dir
+  : >"$LANDING_TRANSCRIPT"
+  landing_note_image
+  landing_bootstrap
+  for step in plan-managers seed plan run again; do
+    started="$started $step"
+    landing_step "$step" "$step" || failed=1
+    [[ "$failed" -eq 0 ]] || break
+  done
+  return "$failed"
+}
+
 main() {
   local distro=fedora
   local -a args=()
@@ -3457,6 +3515,7 @@ main() {
     aws-cli) cmd_aws_cli "$@" ;;
     bruno) cmd_bruno "$@" ;;
     playwright-mcp) cmd_playwright_mcp "$@" ;;
+    update-all) cmd_update_all "$@" ;;
     -h|--help) usage; exit 0 ;;
     "") usage; exit 2 ;;
     *) printf 'unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;
