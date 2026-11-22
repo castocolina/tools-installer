@@ -111,6 +111,51 @@ def test_three_tools_leave_three_run_log_lines_and_one_shared_line(
     assert snapshot(checkout) == before and ctx.home == home
 
 
+@pytest.mark.parametrize(
+    "scenario,expected_code,summary,body",
+    [
+        ("three", 0, "3 tools updated", "updated: brew, uv, ruff"),
+        ("failing", 1, "1 tool updated, 1 failed", "updated: uv; failed: brew"),
+    ],
+)
+def test_the_three_tool_job_notifies_once_through_the_real_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    expected_code: int,
+    summary: str,
+    body: str,
+) -> None:
+    _home, checkout, uv, lock = make_job(tmp_path, monkeypatch, scenario)
+    config_path = tmp_path / "config.json"
+    config = json.loads(config_path.read_text())
+    config["notifier"] = "real"
+    config_path.write_text(json.dumps(config))
+    recorder = uv.parent / "notify-send"
+    args = tmp_path / "args"
+    bus = tmp_path / "bus"
+    recorder.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{args}'\n"
+        f"printf '%s\\n' \"${{DBUS_SESSION_BUS_ADDRESS-unset}}\" >> '{bus}'\n"
+    )
+    recorder.chmod(0o755)
+    code, lines = run_job(tmp_path, checkout, uv, lock)
+    assert code == expected_code, (
+        lines,
+        (tmp_path / "traceback").read_text() if (tmp_path / "traceback").exists() else "",
+    )
+    assert len(lines) == 2 and "update-all start" in lines[0]
+    assert args.read_text().splitlines() == [
+        "--app-name=tools-installer",
+        "--urgency=normal",
+        "--",
+        summary,
+        body,
+    ]
+    assert bus.read_text().splitlines() == ["unix:path=/dummy/bus"]
+    assert lines[1].count("update-all ") == 1
+
+
 def test_a_failing_manager_through_the_runner_exits_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

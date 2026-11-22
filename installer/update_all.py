@@ -21,6 +21,8 @@ COMMAND_TIMEOUT: Final = 1200
 KILL_GRACE: Final = 3
 CLEANUP_BUDGET: Final = 4 * KILL_GRACE
 
+# Limit desktop notification lists independently of the result-line budget.
+_NOTIFY_IDS = 8
 RESULT_LIMIT = 300
 FIRST_FAILED_LIMIT = 40
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
@@ -30,6 +32,26 @@ _CONTROLS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 def plain_line(text: str, limit: int = RESULT_LIMIT) -> str:
     """Remove terminal escapes and controls, then bound the resulting single line."""
     return " ".join(_CONTROLS.sub("", _ANSI.sub("", text)).split())[:limit]
+
+
+def notification(updated: Sequence[str], failed: Sequence[str]) -> tuple[str, str]:
+    """Build a desktop notification using only counts and registry IDs."""
+    summaries: list[str] = []
+    bodies: list[str] = []
+    for label, ids in (("updated", updated), ("failed", failed)):
+        if not ids:
+            continue
+        count = len(ids)
+        summaries.append(
+            f"{count} tool{'s' if count != 1 else ''} updated"
+            if label == "updated"
+            else f"{count} failed"
+        )
+        names = ", ".join(ids[:_NOTIFY_IDS])
+        if count > _NOTIFY_IDS:
+            names += f", and {count - _NOTIFY_IDS} more"
+        bodies.append(f"{label}: {names}")
+    return ", ".join(summaries), "; ".join(bodies)
 
 
 def summary_line(

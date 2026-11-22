@@ -7,7 +7,14 @@ from typing import cast
 
 import pytest
 
-from installer import cursor_shim, schedule_run, schedules, update_all_state, update_check
+from installer import (
+    cursor_shim,
+    schedule_run,
+    schedules,
+    update_all,
+    update_all_state,
+    update_check,
+)
 from installer.manager_versions import ManagerVersion, OutdatedReport
 from installer.model import Method, Tool
 from installer.ownership import ManagerInventory, ManagerOwnership, Owner
@@ -33,7 +40,192 @@ from tests.update_all_doubles import (
     run_update_all,
     state,
 )
-from tests.update_check_doubles import check_context, place_yq, real_service, yq_tool
+from tests.update_check_doubles import FakeNotifier, check_context, place_yq, real_service, yq_tool
+
+
+def notification_deps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, notifier: FakeNotifier
+) -> schedule_run.RunDeps:
+    context = check_context(tmp_path, monkeypatch)
+    now = datetime(2026, 11, 22, tzinfo=UTC)
+    tools = [catalog_tool(name) for name in ("brew", "uv", "volta")]
+    states = {tool.id: state(tool, "installer") for tool in tools}
+    states["volta"] = state(catalog_tool("volta", update=False), "installer")
+    return run_deps(
+        tools,
+        context,
+        service=SpyService(),
+        owners={key: item.ownership for key, item in states.items()},
+        refresh=SequenceRefresher(tmp_path / "versions", [states], clock=lambda: now),
+        now=lambda: now,
+        notify=notifier,
+    )
+
+
+def test_notification_text_is_counts_and_ids_only() -> None:
+    assert update_all.notification(["a", "b"], []) == ("2 tools updated", "updated: a, b")
+    assert update_all.notification(["a"], []) == ("1 tool updated", "updated: a")
+    assert update_all.notification(["a"], ["b"]) == (
+        "1 tool updated, 1 failed",
+        "updated: a; failed: b",
+    )
+    assert update_all.notification([], ["b", "c"]) == ("2 failed", "failed: b, c")
+    ids = [str(i) for i in range(10)]
+    assert update_all.notification(ids, ids) == (
+        "10 tools updated, 10 failed",
+        "updated: 0, 1, 2, 3, 4, 5, 6, 7, and 2 more; failed: 0, 1, 2, 3, 4, 5, 6, 7, and 2 more",
+    )
+
+
+def test_one_notification_with_counts_after_a_run_that_changed_something(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notifier = FakeNotifier()
+    deps = notification_deps(tmp_path, monkeypatch, notifier)
+    assert run_update_all(deps) == ("ok: 2 updated, 1 skipped", 0)
+    assert notifier.calls == [("2 tools updated", "updated: brew, uv")]
+    assert deps.context is not None
+    schedules.updated_today_path(deps.context).unlink()
+    notifier.calls.clear()
+    service = SpyService({"brew": UpdateOutcome("brew", "failed", "installer", "boom")})
+    assert run_update_all(replace(deps, updates=service)) == (
+        "failed: 1 failed (brew), 1 updated, 1 skipped",
+        1,
+    )
+    assert notifier.calls == [("1 tool updated, 1 failed", "updated: uv; failed: brew")]
+
+
+def test_nothing_to_report_sends_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    notifier = FakeNotifier()
+    deps = notification_deps(tmp_path, monkeypatch, notifier)
+    assert deps.context is not None
+    for name in ("brew", "uv"):
+        update_all_state.record_updated(
+            schedules.updated_today_path(deps.context),
+            name,
+            today=deps.now().date(),
+            by="update-all",
+        )
+    assert run_update_all(deps) == ("ok: 0 updated, 3 skipped", 0)
+    schedules.updated_today_path(deps.context).unlink()
+    assert (
+        run_update_all(
+            replace(deps, probe_version=ScriptedProbe({"brew": ["1", "1"], "uv": ["1", "1"]}))
+        )[0]
+        == "ok: 0 updated, 1 skipped; 2 unchanged"
+    )
+    empty = replace(
+        deps, tools=[], refresh=SequenceRefresher(tmp_path / "empty", [{}], clock=deps.now)
+    )
+    assert run_update_all(empty) == ("ok: 0 updated", 0)
+    assert schedules.update_all_log_path(deps.context).read_bytes() == b""
+    failed = replace(
+        deps,
+        refresh=SequenceRefresher(tmp_path / "bad", [{}], clock=deps.now, raises_on=frozenset({0})),
+    )
+    assert run_update_all(failed) == ("failed: refresh failed", 1)
+    assert notifier.calls == []
+
+
+def test_a_notifier_reason_or_exception_only_adds_the_clause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from installer.notify import no_notifier
+
+    notifier = FakeNotifier("notify-send not found")
+    deps = notification_deps(tmp_path, monkeypatch, notifier)
+    assert deps.context is not None
+
+    def raising(_summary: str, _body: str) -> str | None:
+        raise RuntimeError("secret detail")
+
+    for notify, reason, failed in (
+        (notifier, "notify-send not found", False),
+        (raising, "notifier failed", True),
+        (no_notifier, "no notifier is configured", False),
+    ):
+        store = schedules.updated_today_path(deps.context)
+        store.unlink(missing_ok=True)
+        service = SpyService(
+            {"brew": UpdateOutcome("brew", "failed", "installer", "boom")} if failed else {}
+        )
+        line, code = run_update_all(replace(deps, updates=service, notify=notify))
+        assert line.endswith("; notify skipped: " + reason)
+        assert code == int(failed)
+        assert service.runs == ["brew", "uv"]
+        assert "secret detail" not in line + schedules.update_all_log_path(deps.context).read_text()
+        records, healthy = update_all_state.read_updated(store)
+        assert healthy and set(records) == ({"uv"} if failed else {"brew", "uv"})
+
+
+def test_the_notify_clause_is_last_and_the_line_stays_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notifier = FakeNotifier("x" * 500)
+    deps = notification_deps(tmp_path, monkeypatch, notifier)
+    assert deps.context is not None
+    store = schedules.updated_today_path(deps.context)
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text("invalid")
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise OSError("unavailable")
+
+    monkeypatch.setattr(update_all_state, "start_run_log", fail)
+    monkeypatch.setattr(update_all_state, "record_updated", fail)
+    assert isinstance(deps.refresh, SequenceRefresher)
+    deps.refresh.raises_on = frozenset({1})
+    line, code = run_update_all(deps)
+    assert code == 0 and line.startswith("ok: 2 updated, 1 skipped") and len(line) <= 300
+    parts = [
+        "updated-today record unreadable",
+        "run log not saved",
+        "updated-today record not saved",
+        "second refresh failed; dependents judged on the first pass",
+        "notify skipped: ",
+    ]
+    assert all(part in line for part in parts)
+    assert [line.index(part) for part in parts] == sorted(line.index(part) for part in parts)
+    assert line.endswith("x")
+
+
+def test_the_direct_cli_line_is_plain_for_a_notifier_reason_with_tabs_and_ansi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import setup
+
+    reason = "one\ttwo \x1b[31mred\nlast"
+    deps = notification_deps(tmp_path, monkeypatch, FakeNotifier(reason))
+
+    def load(_path: object) -> list[Tool]:
+        return []
+
+    def build(*_args: object, **_kwargs: object) -> schedule_run.RunDeps:
+        return deps
+
+    monkeypatch.setattr(setup, "load_tools", load)
+    monkeypatch.setattr(setup, "detect", lambda: FEDORA)
+    monkeypatch.setattr(setup, "_schedule_run_deps", build)
+    assert setup.main(["--run-schedule", "update-all"]) == 0
+    line = capsys.readouterr().out
+    assert line.count("\n") == 1 and "\t" not in line and "\x1b" not in line
+    assert len(line.rstrip("\n")) <= 300
+    assert line.rstrip("\n").endswith("; notify skipped: " + update_all.plain_line(reason))
+
+
+def test_no_tool_output_reaches_the_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notifier = FakeNotifier()
+    deps = notification_deps(tmp_path, monkeypatch, notifier)
+    service = SpyService(
+        {"brew": UpdateOutcome("brew", "failed", "installer", "boom <b>x</b> \x1b[31mred")}
+    )
+    deps = replace(
+        deps, updates=service, probe_version=ScriptedProbe({"uv": ["<b>old</b>", "<b>new</b>"]})
+    )
+    assert run_update_all(deps)[1] == 1
+    assert notifier.calls == [("1 tool updated, 1 failed", "updated: uv; failed: brew")]
 
 
 def test_the_run_updates_managers_then_dependents_in_plan_order(

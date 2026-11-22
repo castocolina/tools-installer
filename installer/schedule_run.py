@@ -511,6 +511,7 @@ def _update_all(deps: RunDeps) -> tuple[str, int]:
         clauses.append("run log not saved")
     updated = unchanged = skipped = 0
     failed: list[str] = []
+    updated_ids: list[str] = []
     failed_managers: dict[str, str] = {}
     completed: set[str] = set()
     mutated_managers: set[str] = set()
@@ -582,6 +583,7 @@ def _update_all(deps: RunDeps) -> tuple[str, int]:
                 unchanged += 1
             else:
                 updated += 1
+                updated_ids.append(tool.id)
             if run.mutated:
                 record_day = deps.now().date()
                 entries[tool.id] = update_all_state.UpdatedEntry(record_day, "update-all")
@@ -637,6 +639,13 @@ def _update_all(deps: RunDeps) -> tuple[str, int]:
         ),
         chosen.states,
     )
+    if updated_ids or failed:
+        try:
+            reason = deps.notify(*update_all.notification(updated_ids, failed))
+        except Exception:
+            reason = "notifier failed"
+        if reason is not None:
+            clauses.append(f"notify skipped: {reason}")
     return update_all.summary_line(
         updated=updated,
         skipped=skipped,

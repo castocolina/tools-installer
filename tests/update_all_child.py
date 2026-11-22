@@ -143,7 +143,28 @@ while True: time.sleep(1)
             def build_deps(_tools: list[Tool], _platform: Platform, **_kwargs: object) -> RunDeps:
                 return deps
 
-            patch(setup, "_schedule_run_deps", build_deps)
+            if config.get("notifier") == "real":
+                refresh = deps.refresh
+                assert isinstance(refresh, SequenceRefresher)
+
+                def resolve(tool: Tool) -> object:
+                    return states[tool.id].ownership
+
+                def load_real(_path: object) -> list[Tool]:
+                    return [brew, uv, ruff]
+
+                def build_real(*_a: object, **_k: object) -> tuple[object, object, None, None]:
+                    return refresh, spy, None, None
+
+                def probe(*_a: object, **_k: object) -> None:
+                    return None
+
+                vars(refresh)["resolve_owner"] = resolve
+                patch(setup, "load_tools", load_real)
+                patch(setup, "_build_services", build_real)
+                patch(setup, "probe_version_output", probe)
+            else:
+                patch(setup, "_schedule_run_deps", build_deps)
         with mock_patch.object(os, "geteuid", return_value=1000):
             code = setup.main(argv)
         ctx = schedules.context_for(
