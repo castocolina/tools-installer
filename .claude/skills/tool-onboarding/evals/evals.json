@@ -1,0 +1,41 @@
+{
+  "skill_name": "tool-onboarding",
+  "evals": [
+    {
+      "id": "onboard-macos-only-cask-app",
+      "prompt": "Add Rectangle, the macOS window manager, to the installer's catalog. Research it, decide how it installs and uninstalls, and write the entry with its verification comment.",
+      "expected_output": "A [[tool]] block for a vendor-macOS-only app with one cask method that places the bundle in ~/Applications, a dated # Verified comment citing the research, the absence of a CLI recorded so no link is promised, the id added to MACOS_ONLY in tests/test_registry.py with the vendor fact, and the first-run dialogs written as a UAT line deferred to the owner's Mac.",
+      "assertions": [
+        "The block carries a dated `# Verified` comment above `[[tool]]` that cites the vendor page or release listing the agent read, not a recollection",
+        "There is exactly one `cask` method with `os`, `cask` and `app` params, plus `min_os_version` when the cask needs one, and the bundle lands in `~/Applications` through the executor's `--appdir`",
+        "The `# Verified` comment records that Rectangle ships no CLI, so no `~/.local/bin` link applies, and records any other platform gap it finds instead of promising one",
+        "The id is added to `MACOS_ONLY` in `tests/test_registry.py` together with the vendor fact that no Linux build exists, so the exemption has a reason",
+        "First-run dialogs are not marked passed: the agent writes a UAT line deferred to the owner's Mac and names the Gatekeeper prompt as expected once per fresh cask install"
+      ]
+    },
+    {
+      "id": "add-a-terminal",
+      "prompt": "hey, can you add the Rio terminal to the catalog? it runs on macOS and Linux. pick the install method and set up the terminal defaults for it",
+      "expected_output": "A registry entry for the terminal and its row in references/terminal-defaults.md in the same change, every rule cell starting with a status word, the four defaults applied as rules and never offered as questions, and the skill's test file passing.",
+      "assertions": [
+        "The agent reads `references/terminal-defaults.md` at step 7 and adds the new terminal's row there in the same change as its registry entry, not in SKILL.md",
+        "Each of the four rule cells in the new row starts with one status word (`vendor`, `written`, `planned (phase N)`, `gap (backlog 999.x)`, `n/a` or `unverified`) followed by its reason",
+        "The agent applies the four terminal defaults as rules and never asks the developer whether to enable word navigation, clear or same-directory behavior; only extras such as shell integration are offered",
+        "The agent never writes the global Option-as-Alt switch for word navigation and binds only the two Option+Left and Option+Right chords where the vendor default does not already meet the rule",
+        "`uv run pytest tests/test_tool_onboarding_skill.py` is run and passes, and the agent does not claim a real-Mac check passed"
+      ]
+    },
+    {
+      "id": "review-entry-without-linux-method",
+      "prompt": "the entry below only has a macOS cask, but the vendor ships Linux builds as well. tell me what to change and update its notes.\n\n```toml\n# Verified 2026-11-01: cask only\n[[tool]]\nid = \"example-desk\"\nname = \"Example Desk\"\ncategory = \"dev\"\ncmd = \"example-desk\"\npriority = \"P3\"\naudience = \"human\"\ntier = \"user\"\nverified = 2026-11-01\ndesc = \"Example desktop tool.\"\n\n[[tool.method]]\nkind = \"cask\"\nos = [\"macos\"]\ncask = \"example-desk\"\napp = \"Example Desk.app\"\n```",
+      "expected_output": "A review that opens a ### Phase 999.x item under ## Backlog in .planning/ROADMAP.md naming the missing Linux capability, keeps the id in a gap set of tests/test_registry.py (adding a NO_LINUX set when none fits) with that item named, refreshes the # Verified comment, and never calls the entry macOS-only.",
+      "assertions": [
+        "The review opens a `### Phase 999.x` item under `## Backlog` in `.planning/ROADMAP.md` that names the missing Linux capability, instead of only describing the gap in prose",
+        "The id stays in a gap set (`NO_*`) of `tests/test_registry.py` (a new `NO_LINUX` set when none fits, never `MACOS_ONLY`) with that backlog item named next to it, so the gap stays visible until it closes",
+        "Neither the entry, its `# Verified` comment nor the answer labels the tool macOS-only, because the vendor ships Linux builds and the missing method is this installer's gap",
+        "The `# Verified` comment is updated with a new date and says which method is missing on which OS and why",
+        "The agent walks steps 3, 4b and 8 against the existing block and checks that install, ownership and removal still give truthful answers"
+      ]
+    }
+  ]
+}

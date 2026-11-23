@@ -14,13 +14,19 @@ import yaml
 
 from installer.enums import Category
 from installer.model import load_tools
-from installer.terminal_keys import TERMINAL_KEYS
+from installer.terminal_keys import CTRL_L, TERMINAL_KEYS
 from tests.skill_verdicts import DIMENSIONS, RUBRIC_MAX, grade, parse_verdict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILL = REPO_ROOT / ".claude" / "skills" / "tool-onboarding" / "SKILL.md"
+SKILL_DIR = REPO_ROOT / ".claude" / "skills" / "tool-onboarding"
+SKILL = SKILL_DIR / "SKILL.md"
+REFERENCE = SKILL_DIR / "references" / "terminal-defaults.md"
+EVALS = SKILL_DIR / "evals" / "evals.json"
+TRIGGER_QUERIES = SKILL_DIR / "evals" / "trigger-queries.json"
 REGISTRY = REPO_ROOT / "installer" / "registry.toml"
-TABLE_HEADING = "#### Closed per-terminal table"
+TABLE_HEADING = "## Closed per-terminal table"
+KONSOLE_HEADING = "## Konsole"
+POINTER_HEADING = "#### Closed per-terminal table"
 RULES_HEADING = "#### Terminal and IDE defaults"
 EXTRAS_HEADING = "#### Extras are asked"
 CONFLICTS_HEADING = "#### Conflicts"
@@ -34,7 +40,9 @@ ASK_RE = re.compile(
 )
 _SEPARATOR_ROW_RE = re.compile(r"\|[-|: ]+\|")
 ID_CELL_RE = re.compile(r"`([a-z0-9][a-z0-9._-]*)`")
-STATUS_RE = re.compile(r"(?:vendor|written|unverified|n/a|planned \(phase \d+\))(?::|$)")
+STATUS_RE = re.compile(
+    r"(?:vendor|written|unverified|n/a|planned \(phase \d+\)|gap \(backlog 999\.\d+\))(?::|$)"
+)
 
 
 def _ci_workflow() -> dict[str, Any]:
@@ -84,11 +92,22 @@ def _step(text: str, number: str) -> str:
 
 
 def _subsection(text: str, heading: str) -> str:
+    """The section under `heading`, up to the next heading of the same or a higher level."""
     matches = list(re.finditer(r"^" + re.escape(heading) + r"$", text, re.MULTILINE))
     assert len(matches) == 1, f"expected one {heading!r}, found {len(matches)}"
     start = matches[0]
-    nxt = re.search(r"^#### |^### ", text[start.end() :], re.MULTILINE)
+    level = len(heading) - len(heading.lstrip("#"))
+    nxt = re.search(rf"^#{{1,{level}}} ", text[start.end() :], re.MULTILINE)
     return text[start.start() : start.end() + nxt.start()] if nxt else text[start.start() :]
+
+
+def _table_section() -> str:
+    return _subsection(_text(REFERENCE), TABLE_HEADING)
+
+
+def _guarded_text() -> str:
+    """The text the ask-sentence and Option-as-Alt guards scan: the skill and its reference."""
+    return _text(SKILL) + "\n" + _text(REFERENCE)
 
 
 def _items(section: str) -> list[str]:
@@ -247,19 +266,48 @@ def test_rules_are_not_questions() -> None:
 def test_rules_and_table_sections_are_ascii() -> None:
     text = _text(SKILL)
     assert _subsection(text, RULES_HEADING).isascii()
-    assert _subsection(text, TABLE_HEADING).isascii()
+    assert _subsection(text, POINTER_HEADING).isascii()
+    assert _text(REFERENCE).isascii()
 
 
-def test_rules_sit_under_step_7_before_the_table() -> None:
+def test_rules_sit_under_step_7_before_the_table_pointer() -> None:
     text = _text(SKILL)
     step = _step(text, "7")
     assert RULES_HEADING in step
-    assert TABLE_HEADING in step
-    assert step.index(RULES_HEADING) < step.index(TABLE_HEADING)
+    assert POINTER_HEADING in step
+    assert step.index(RULES_HEADING) < step.index(POINTER_HEADING)
+
+
+def test_the_pointer_sends_a_terminal_or_editor_entry_to_the_reference() -> None:
+    pointer = " ".join(_subsection(_text(SKILL), POINTER_HEADING).split())
+    for phrase in (
+        "[the table](references/terminal-defaults.md)",
+        "`references/terminal-defaults.md`",
+        "terminal or editor",
+        "adds its row there with its entry",
+        "`tests/test_tool_onboarding_skill.py`",
+    ):
+        assert phrase in pointer
+    assert (SKILL.parent / "references" / "terminal-defaults.md").is_file()
+
+
+def test_the_skill_holds_no_table_row_and_stays_small() -> None:
+    text = _text(SKILL)
+    for tool_id in registry_ids(REGISTRY):
+        assert f"| `{tool_id}` |" not in text, tool_id
+    assert len(text.encode("utf-8")) < 28500
+
+
+def test_the_reference_holds_the_table_and_the_konsole_note() -> None:
+    reference = _text(REFERENCE)
+    assert reference.index(TABLE_HEADING) < reference.index(KONSOLE_HEADING)
+    konsole = " ".join(_subsection(reference, KONSOLE_HEADING).split())
+    assert "Konsole has no row" in konsole and "_sync_konsole" in konsole
+    assert KONSOLE_HEADING not in _text(SKILL) and "Konsole has no row" not in _text(SKILL)
 
 
 def test_rules_no_sentence_asks_about_a_default() -> None:
-    assert ask_sentences(_text(SKILL)) == []
+    assert ask_sentences(_guarded_text()) == []
 
 
 @pytest.mark.parametrize(
@@ -282,7 +330,7 @@ def test_rules_ask_detector_flags_a_question(text: str, expected: list[str]) -> 
 
 
 def test_rules_option_as_alt_is_only_named_to_forbid_it() -> None:
-    assert option_as_alt_unnegated(_text(SKILL)) == []
+    assert option_as_alt_unnegated(_guarded_text()) == []
     assert option_as_alt_unnegated("Turn on the global Option-as-Alt switch for word navigation.")
     assert option_as_alt_unnegated("Set macos_option_as_alt yes in kitty.conf.")
     assert option_as_alt_unnegated("never the global Option-as-Alt switch") == []
@@ -334,9 +382,38 @@ def test_rules_frontmatter_overview_and_step_9() -> None:
     assert "the four defaults applied as rules" in description
     assert "which extras to offer" in description
     assert len(description) <= 1024
+    assert "catalog-audit" not in description
     overview = text[text.index("## Overview") : text.index("## When to Use")]
-    assert "The one exception is the closed per-terminal table under step 7" in overview
+    assert (
+        "The one exception is the closed per-terminal table in "
+        "`references/terminal-defaults.md`, read at step 7"
+    ) in overview
     assert "which extras were offered" in " ".join(_step(text, "9").split())
+
+
+def test_the_description_parses_as_yaml_to_the_raw_line() -> None:
+    text = _text(SKILL)
+    frontmatter = text.split("---\n")[1]
+    raw = next(
+        line.removeprefix("description: ")
+        for line in frontmatter.splitlines()
+        if line.startswith("description: ")
+    )
+    parsed = yaml.safe_load(frontmatter)
+    assert set(parsed) == {"name", "description"}
+    assert parsed["name"] == SKILL_DIR.name
+    assert parsed["description"] == raw
+    for phrase in (
+        "onboarding",
+        "even when installer/registry.toml is never named",
+        "only one OS",
+        "platform gap",
+        "terminal or IDE defaults",
+        "Not for auditing every entry against upstream",
+        "`make verify-registry`",
+        "installing a tool on this machine",
+    ):
+        assert phrase in raw
 
 
 def test_conflicts_two_clauses_with_examples() -> None:
@@ -387,7 +464,7 @@ def test_conflicts_sits_in_step_7_and_is_ascii() -> None:
     step = _step(text, "7")
     section = _subsection(text, CONFLICTS_HEADING)
     assert CONFLICTS_HEADING in step
-    assert step.index(TABLE_HEADING) < step.index(CONFLICTS_HEADING) < step.index(EXTRAS_HEADING)
+    assert step.index(POINTER_HEADING) < step.index(CONFLICTS_HEADING) < step.index(EXTRAS_HEADING)
     assert section.isascii()
 
 
@@ -490,6 +567,22 @@ def test_macos_apps_records_the_four_facts_and_rules() -> None:
 
 def test_macos_apps_is_ascii() -> None:
     assert _subsection(_text(SKILL), MACOS_APPS_HEADING).isascii()
+
+
+def test_macos_apps_sorts_first_run_dialogs_into_three_groups() -> None:
+    section = _subsection(_text(SKILL), MACOS_APPS_HEADING)
+    start = section.index("A macOS app can stop on a first-run dialog")
+    paragraph = section[start:]
+    groups = [line for line in paragraph.splitlines() if line.startswith("- ")]
+    assert len(groups) == 3
+    assert groups[0].startswith("- The post-install answers it")
+    assert groups[1].startswith("- The owner answers it")
+    assert groups[2].startswith("- It is expected and named in the UAT line")
+    assert "en_US.UTF-8" in groups[0] and "en_CL" in groups[0]
+    assert "Sparkle" in groups[1] and "999.37" in groups[1]
+    assert "com.apple.quarantine" in groups[2] and "never strips it" in groups[2]
+    assert "owner's Mac" in paragraph and "wheel scrolls inside a pager" in paragraph
+    assert "Cmd+K that sends Ctrl+L" not in paragraph
 
 
 def test_macos_apps_step_9_verified_example() -> None:
@@ -604,12 +697,14 @@ def terminal_keys_table_problems(section: str) -> list[str]:
     rows = table_rows(section)
     by_id = dict(zip(table_ids(rows), rows, strict=True))
     problems: list[str] = []
-    for tool_id in TERMINAL_KEYS:
+    for tool_id, keys_row in TERMINAL_KEYS.items():
         row = by_id.get(tool_id)
+        # A row that sends Ctrl+L is written; any other clear value names the vendor action.
+        status = "written" if keys_row.clear == CTRL_L else "vendor"
         if row is None:
             problems.append(f"no table row for {tool_id}")
-        elif not row[4].startswith("written"):
-            problems.append(f"{tool_id} clear cell is not written")
+        elif not row[4].startswith(status):
+            problems.append(f"{tool_id} clear cell is not {status}")
     herdr = by_id.get("herdr")
     if herdr is not None:
         problems.extend(
@@ -626,7 +721,7 @@ def terminal_keys_table_problems(section: str) -> list[str]:
 
 
 def test_table_cells_follow_the_terminal_keys_table() -> None:
-    section = _subsection(_text(SKILL), TABLE_HEADING)
+    section = _table_section()
     assert terminal_keys_table_problems(section) == []
     changed = section.replace(
         "written: cmd+k (macOS) and ctrl+shift+k (Linux) send Ctrl+L;",
@@ -637,6 +732,11 @@ def test_table_cells_follow_the_terminal_keys_table() -> None:
         "kitty clear cell is not written",
         "row `kitty` contains planned (phase 29)",
     ]
+    written_cell = section.replace(
+        "| vendor: iTerm2's own Cmd+K", "| written: iTerm2's own Cmd+K", 1
+    )
+    assert terminal_keys_table_problems(written_cell) == ["iterm2 clear cell is not vendor"]
+    assert TERMINAL_KEYS["iterm2"].clear != CTRL_L
 
 
 def test_the_script_row_names_the_validated_keys() -> None:
@@ -650,7 +750,7 @@ def test_the_script_row_names_the_validated_keys() -> None:
 
 
 def test_ghostty_row_records_what_is_proven() -> None:
-    rows = table_rows(_subsection(_text(SKILL), TABLE_HEADING))
+    rows = table_rows(_table_section())
     row = next(row for row in rows if row[0] == "`ghostty`")
     assert len(row) == 7
     assert all(
@@ -665,22 +765,35 @@ def test_ghostty_row_records_what_is_proven() -> None:
 
 
 def test_iterm2_row_records_what_is_proven() -> None:
-    rows = table_rows(_subsection(_text(SKILL), TABLE_HEADING))
+    rows = table_rows(_table_section())
     row = next(row for row in rows if row[0] == "`iterm2`")
     assert len(row) == 7
     assert all(
         cell.startswith(status)
         for cell, status in zip(
-            row[2:], ("unverified", "written", "written", "written", "auto-reload"), strict=True
+            row[2:], ("unverified", "written", "vendor", "written", "auto-reload"), strict=True
         )
     )
     assert all(term in row[3] for term in ("option+left", "option+right", "Option stays Normal"))
     assert "macos-option-as-alt" not in row[3]
-    assert "cmd+k" in row[4] and "Custom Directory" in row[5]
+    assert all(
+        term in row[4] for term in ("Cmd+K", "Clear Buffer", "writes no Cmd+K row", "999.37")
+    )
+    assert "sends Ctrl+L" not in row[4] and "Custom Directory" in row[5]
+
+
+def test_the_alacritty_row_marks_the_platform_gap_with_the_gap_word() -> None:
+    rows = table_rows(_table_section())
+    row = next(row for row in rows if row[0] == "`alacritty`")
+    assert len(row) == 7
+    assert row[3].startswith("gap (backlog 999.38):")
+    assert row[4].startswith("written:") and "gap (backlog 999.38)" in row[4]
+    assert "Linux Alt+Left/Right rows stay (owner decision)" in row[3]
+    assert "n/a" not in row[3]
 
 
 def test_herdr_app_row_records_what_is_proven() -> None:
-    rows = table_rows(_subsection(_text(SKILL), TABLE_HEADING))
+    rows = table_rows(_table_section())
     row = next(row for row in rows if row[0] == "`herdr-app`")
     assert len(row) == 7
     assert all(
@@ -695,7 +808,7 @@ def test_herdr_app_row_records_what_is_proven() -> None:
 
 
 def test_the_herdr_app_row_records_the_container_evidence_once() -> None:
-    rows = table_rows(_subsection(_text(SKILL), TABLE_HEADING))
+    rows = table_rows(_table_section())
     row = next(row for row in rows if row[0] == "`herdr-app`")
     assert len(row) == 7
     clause = "install, seeded keys and removal read back in a disposable container, 31 D-17"
@@ -710,8 +823,15 @@ def test_the_herdr_app_row_records_the_container_evidence_once() -> None:
     assert all("container" not in cell for cell in iterm)
 
 
+def test_the_gap_status_word_needs_a_backlog_number() -> None:
+    assert STATUS_RE.match("gap (backlog 999.38): x")
+    assert STATUS_RE.match("gap: x") is None
+    assert STATUS_RE.match("gap (backlog): x") is None
+    assert STATUS_RE.match("gap (backlog 999.x): x") is None
+
+
 def test_table_matches_the_registry() -> None:
-    ids = table_ids(table_rows(_subsection(_text(SKILL), TABLE_HEADING)))
+    ids = table_ids(table_rows(_table_section()))
     assert ids
     assert table_drift(registry_ids(REGISTRY), ids) == []
 
@@ -736,7 +856,7 @@ formula = "demo"
 """
     manifest = tmp_path / "registry.toml"
     manifest.write_text(REGISTRY.read_text(encoding="utf-8") + addition, encoding="utf-8")
-    real_ids = table_ids(table_rows(_subsection(_text(SKILL), TABLE_HEADING)))
+    real_ids = table_ids(table_rows(_table_section()))
     assert table_drift(registry_ids(manifest), real_ids + extra_ids) == expected
 
 
@@ -777,7 +897,7 @@ def test_table_rows_refuse_a_wrong_header() -> None:
 
 
 def test_table_rule_cells_start_with_a_status_word() -> None:
-    real_rows = table_rows(_subsection(_text(SKILL), TABLE_HEADING))
+    real_rows = table_rows(_table_section())
     assert bad_status_cells(real_rows) == []
     bad_rows = table_rows(_fixture("`kitty`"))
     bad_rows[0][3] = "maybe: later"
@@ -792,5 +912,56 @@ def test_table_rule_cells_start_with_a_status_word() -> None:
     assert bad_status_cells(bad_rows) == ["row kitty has 8 cells"]
 
 
-def test_table_sits_under_step_7() -> None:
-    assert TABLE_HEADING in _step(_text(SKILL), "7")
+def test_table_pointer_sits_under_step_7() -> None:
+    assert POINTER_HEADING in _step(_text(SKILL), "7")
+    assert not re.search(rf"^{re.escape(TABLE_HEADING)}$", _text(SKILL), re.MULTILINE)
+
+
+def test_the_status_word_paragraph_names_the_gap_word() -> None:
+    paragraph = " ".join(_table_section().split())
+    assert "`gap (backlog 999.x)` (a platform gap" in paragraph
+    assert "names the missing capability" in paragraph
+
+
+_SCENARIO_IDS = {
+    "onboard-macos-only-cask-app",
+    "add-a-terminal",
+    "review-entry-without-linux-method",
+}
+_NEAR_MISSES = ("make verify-registry", "catalog-audit", "install kitty on my machine")
+
+
+def test_evals_shape() -> None:
+    data = json.loads(_text(EVALS))
+    assert data["skill_name"] == "tool-onboarding" == SKILL_DIR.name
+    evals = data["evals"]
+    assert {e["id"] for e in evals} == _SCENARIO_IDS
+    assert len(evals) == len(_SCENARIO_IDS)
+    for e in evals:
+        assert len(e["prompt"]) >= 40, e["id"]
+        assert e["expected_output"].strip(), e["id"]
+        assert len(e["assertions"]) >= 2, e["id"]
+        assert all(len(a) >= 20 for a in e["assertions"]), e["id"]
+
+
+def test_the_review_eval_requires_a_backlog_item_and_no_macos_only_label() -> None:
+    evals = json.loads(_text(EVALS))["evals"]
+    review = next(e for e in evals if e["id"] == "review-entry-without-linux-method")
+    flat = " ".join(review["assertions"])
+    assert "### Phase 999.x" in flat and "## Backlog" in flat and "NO_*" in flat
+    assert "macOS-only" in flat
+
+
+def test_trigger_queries_shape() -> None:
+    queries = json.loads(_text(TRIGGER_QUERIES))
+    assert 16 <= len(queries) <= 24
+    assert all(set(q) == {"query", "should_trigger"} for q in queries)
+    assert all(isinstance(q["should_trigger"], bool) for q in queries)
+    positives = [q["query"] for q in queries if q["should_trigger"]]
+    negatives = [q["query"] for q in queries if not q["should_trigger"]]
+    assert 8 <= len(positives) <= 12
+    assert 8 <= len(negatives) <= 12
+    assert not [query for query in positives if "registry" in query.lower()]
+    for near_miss in _NEAR_MISSES:
+        assert any(near_miss in query for query in negatives), near_miss
+    assert not [query for query in positives if any(miss in query for miss in _NEAR_MISSES)]

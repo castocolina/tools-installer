@@ -23,6 +23,7 @@ def _rule_document_paths() -> list[Path]:
         REPO_ROOT / ".claude" / "python-tooling.md",
         REPO_ROOT / ".claude" / "testing.md",
         TOOL_ONBOARDING_SKILL,
+        TOOL_ONBOARDING_SKILL.parent / "references" / "terminal-defaults.md",
         CATALOG_AUDIT_SKILL,
         CATALOG_AUDIT_SKILL.parent / "references" / "report-template.md",
     ]

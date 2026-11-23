@@ -1,0 +1,82 @@
+[
+  {
+    "query": "add Rectangle to the installer, it is a macOS window manager, research it and write the entry",
+    "should_trigger": true
+  },
+  {
+    "query": "onboard zellij: decide its tier, how it installs on each OS and how it is removed",
+    "should_trigger": true
+  },
+  {
+    "query": "this tool only has a macOS install method in the installer but the vendor ships Linux builds too, what should I do about that",
+    "should_trigger": true
+  },
+  {
+    "query": "I am adding a terminal and want Cmd+K to clear the screen and scrollback and Option+Arrow to move by word, what does the installer need",
+    "should_trigger": true
+  },
+  {
+    "query": "review the iTerm2 entry: do its uninstall path and its first-run dialogs hold up",
+    "should_trigger": true
+  },
+  {
+    "query": "a vendor ships only a .dmg for macOS, how should the installer entry record that platform gap",
+    "should_trigger": true
+  },
+  {
+    "query": "review the lazygit entry's removal path and its dated Verified comment using the onboarding steps",
+    "should_trigger": true
+  },
+  {
+    "query": "run make verify-registry and tell me which release pins drifted",
+    "should_trigger": false
+  },
+  {
+    "query": "audit every tool in the catalog against upstream with the catalog-audit skill and write the summary",
+    "should_trigger": false
+  },
+  {
+    "query": "please install kitty on my machine and make it my default terminal",
+    "should_trigger": false
+  },
+  {
+    "query": "explain what the postinstall hooks table in installer/postinstall.py does",
+    "should_trigger": false
+  },
+  {
+    "query": "update my local pi install to the latest version",
+    "should_trigger": false
+  },
+  {
+    "query": "bump the kitty pin in registry.toml to the latest release",
+    "should_trigger": false
+  },
+  {
+    "query": "summarise the release notes of ghostty 1.4",
+    "should_trigger": false
+  },
+  {
+    "query": "uninstall wezterm from this Mac",
+    "should_trigger": false
+  },
+  {
+    "query": "how do I change the font and colors in my own kitty config",
+    "should_trigger": false
+  },
+  {
+    "query": "add a new dmg method kind to installer/model.py",
+    "should_trigger": false
+  },
+  {
+    "query": "my zellij entry installs fine on mac but nobody can remove it cleanly on fedora, can you sort out what the entry should say",
+    "should_trigger": true
+  },
+  {
+    "query": "the new terminal opens its tabs in my home folder instead of where I was, make the catalog entry do the right thing like the others",
+    "should_trigger": true
+  },
+  {
+    "query": "the vendor has a linux build for this app and our catalog entry for it does not, patch it up",
+    "should_trigger": true
+  }
+]

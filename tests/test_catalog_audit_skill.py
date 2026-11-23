@@ -92,6 +92,7 @@ def test_skill_links_resolve() -> None:
 
 
 TOOL_ONBOARDING = REPO_ROOT / ".claude" / "skills" / "tool-onboarding" / "SKILL.md"
+TOOL_ONBOARDING_REFERENCE = TOOL_ONBOARDING.parent / "references" / "terminal-defaults.md"
 _STEP_RE = re.compile(r"`(### \d+b?\. [^`]+)`")
 _SEPARATOR_ROW_RE = re.compile(r"\|[-|: ]+\|")
 # The report grammar's own header row is not tool-onboarding content.
@@ -122,7 +123,7 @@ def test_skill_names_tool_onboarding_steps_by_heading() -> None:
 
 
 def test_skill_copies_no_table_and_no_asset_check() -> None:
-    theirs = _table_rows(_text(TOOL_ONBOARDING))
+    theirs = _table_rows(_text(TOOL_ONBOARDING)) | _table_rows(_text(TOOL_ONBOARDING_REFERENCE))
     for path in _skill_files():
         text = _text(path)
         assert not (theirs & _table_rows(text)), path.name

@@ -242,6 +242,18 @@ LEDGER: dict[tuple[str, str], str | None] = {
     ("tests/test_docs.py", "AGENTS.md"): "AGENTS.md",
     ("tests/test_docs.py", "README.md"): "README.md",
     ("tests/test_docs.py", "SKILL.md"): ".claude/skills/*/SKILL.md",
+    (
+        "tests/test_catalog_audit_skill.py",
+        "terminal-defaults.md",
+    ): ".claude/skills/tool-onboarding/references/terminal-defaults.md",
+    (
+        "tests/test_docs.py",
+        "terminal-defaults.md",
+    ): ".claude/skills/tool-onboarding/references/terminal-defaults.md",
+    (
+        "tests/test_tool_onboarding_skill.py",
+        "terminal-defaults.md",
+    ): ".claude/skills/tool-onboarding/references/terminal-defaults.md",
     ("tests/test_tool_onboarding_skill.py", "SKILL.md"): ".claude/skills/*/SKILL.md",
     (
         "tests/test_tool_onboarding_skill.py",
