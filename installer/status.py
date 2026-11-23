@@ -81,7 +81,7 @@ def command_stub_reason(
 def _default_app_roots() -> tuple[Path, ...]:
     # A drag-installed copy in /Applications counts as installed too — we must
     # never install a userspace duplicate of a system-wide app.
-    return (Path.home() / "Applications", Path("/Applications"))
+    return installer.locations.app_roots()
 
 
 def _is_installer_shim(tool: Tool, path: Path) -> bool:

@@ -5,8 +5,10 @@ optional in-bundle CLI is symlinked into ~/.local/bin, per the PRD's location
 policy. Extraction uses `ditto -x -k`, the canonical macOS extractor for .app
 zips: it preserves the extended attributes and framework symlinks that
 Info-ZIP `unzip` can mangle in Electron-style bundles. curl never sets
-com.apple.quarantine, so installed apps launch without the Gatekeeper
-"downloaded from the internet" dialog — identical to `brew install --cask`.
+com.apple.quarantine, so app-kind bundles launch without the Gatekeeper
+"downloaded from the internet" dialog. Homebrew casks differ: Homebrew 7 leaves
+com.apple.quarantine on cask bundles (kitty.app, seen 2026-11-23), so Gatekeeper
+asks once per fresh cask install, and the installer never strips it.
 """
 
 import os

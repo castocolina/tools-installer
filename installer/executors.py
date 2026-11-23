@@ -16,7 +16,7 @@ from typing import cast
 
 from installer.bun_globals import bun_dirs, resolve_bun, trusted_dependencies
 from installer.legacy_guard import real_pnpm
-from installer.locations import applications_dir, display_path
+from installer.locations import app_roots, applications_dir, display_path
 from installer.model import Method
 from installer.run import CommandError, Runner, run_output, run_output_with_stderr
 from installer.versions import (
@@ -714,12 +714,28 @@ def _sdkman(method: Method, runner: Runner) -> None:
     runner(sdk_pipeline(install))
 
 
+def _cask_bundle_present(app: str) -> bool:
+    # A bundle is a directory; the roots are the ones status.is_installed reads.
+    return any((root / app).is_dir() for root in app_roots())
+
+
 def _cask(method: Method, runner: Runner) -> None:
     # --appdir keeps the bundle in userspace; brew's default appdir is /Applications,
     # which the PRD forbids (corporate machines without sudo).
-    runner(
-        ["brew", "install", "--cask", f"--appdir={applications_dir()}", require_str(method, "cask")]
-    )
+    cask = require_str(method, "cask")
+    appdir = f"--appdir={applications_dir()}"
+    runner(["brew", "install", "--cask", appdir, cask])
+    app = method.params.get("app")
+    if not isinstance(app, str) or not app or _cask_bundle_present(app):
+        return
+    # A stale Caskroom entry makes `brew install --cask` a no-op while the bundle is gone;
+    # one reinstall restores it, and an app that is still absent is never reported installed.
+    runner(["brew", "reinstall", "--cask", appdir, cask])
+    if not _cask_bundle_present(app):
+        raise ExecutorError(
+            f"cask {cask} did not leave {app} in {applications_dir()}; "
+            f"run `brew reinstall --cask {appdir} {cask}` and check the brew output"
+        )
 
 
 @dataclass(frozen=True)

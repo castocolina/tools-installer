@@ -3154,3 +3154,35 @@ def test_bun_names_no_peer_when_none_or_only_its_own_exists(
     )
     assert outcome.status == InstallStatus.INSTALLED
     assert outcome.postinstall_warning is None
+
+
+def test_a_cask_whose_bundle_never_appears_fails_with_no_receipt_and_no_post_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_not_installed(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    dispatched: list[str] = []
+
+    def record_dispatch(
+        tool: Tool, platform: Platform
+    ) -> tuple[post_install.PostInstallOutput, str | None]:
+        del platform
+        dispatched.append(tool.id)
+        return post_install.PostInstallOutput(), None
+
+    monkeypatch.setattr(engine, "_dispatch_post_install", record_dispatch)
+    calls: list[list[str]] = []
+    outcome = install_tool(
+        _tool(
+            Method(kind="cask", params={"cask": "iterm2", "app": "iTerm.app"}),
+            post_install=("apply_terminal_tuning",),
+        ),
+        _macos_with_brew(),
+        runner=calls.append,
+        read_inventory_fn=_empty_inventory,
+    )
+    assert outcome.status == InstallStatus.FAILED
+    assert [call[1] for call in calls] == ["install", "reinstall"]
+    assert any("iTerm.app" in str(error) for error in outcome.errors)
+    assert receipts.read("rg") is None and dispatched == []

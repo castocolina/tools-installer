@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 import installer.executors as executors
+from installer import locations
 from installer.executors import EXECUTORS, SMOKE_CHECKS, ExecutorError, execute
 from installer.legacy_guard import REDIRECT_SENTINEL
 from installer.locations import prepend_path
@@ -360,6 +361,78 @@ def test_cask_executor_installs_into_user_applications(
     assert calls == [
         ["brew", "install", "--cask", f"--appdir={tmp_path / 'Applications'}", "sublime-text"]
     ]
+
+
+def _bundle_runner(
+    bundle: Path, creates_on: str | None
+) -> tuple[list[list[str]], Callable[[list[str]], None]]:
+    calls: list[list[str]] = []
+
+    def run(argv: list[str]) -> None:
+        calls.append(list(argv))
+        if creates_on is not None and argv[1] == creates_on:
+            bundle.mkdir(parents=True)
+
+    return calls, run
+
+
+def _cask_with_app() -> Method:
+    return Method(kind="cask", params={"cask": "iterm2", "app": "iTerm.app"})
+
+
+def test_cask_with_an_absent_bundle_is_reinstalled_once_then_fails_naming_the_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    appdir = f"--appdir={tmp_path / 'Applications'}"
+    calls, runner = _bundle_runner(tmp_path / "Applications" / "iTerm.app", None)
+    with pytest.raises(ExecutorError, match=r"iterm2.*iTerm\.app"):
+        execute(_cask_with_app(), runner)
+    assert calls == [
+        ["brew", "install", "--cask", appdir, "iterm2"],
+        ["brew", "reinstall", "--cask", appdir, "iterm2"],
+    ]
+
+
+def test_cask_reinstall_that_creates_the_bundle_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    appdir = f"--appdir={tmp_path / 'Applications'}"
+    calls, runner = _bundle_runner(tmp_path / "Applications" / "iTerm.app", "reinstall")
+    execute(_cask_with_app(), runner)
+    assert calls == [
+        ["brew", "install", "--cask", appdir, "iterm2"],
+        ["brew", "reinstall", "--cask", appdir, "iterm2"],
+    ]
+
+
+def test_cask_with_a_present_bundle_runs_one_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls, runner = _bundle_runner(tmp_path / "Applications" / "iTerm.app", "install")
+    execute(_cask_with_app(), runner)
+    assert len(calls) == 1 and calls[0][1] == "install"
+
+
+def test_cask_bundle_under_the_system_applications_root_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    system = tmp_path / "system"
+    monkeypatch.setattr(locations, "SYSTEM_APPLICATIONS", system)
+    calls, runner = _bundle_runner(system / "iTerm.app", "install")
+    execute(_cask_with_app(), runner)
+    assert len(calls) == 1
+
+
+def test_a_stale_plain_file_is_not_a_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / "Applications").mkdir()
+    (tmp_path / "Applications" / "iTerm.app").write_text("stale")
+    calls: list[list[str]] = []
+    with pytest.raises(ExecutorError):
+        execute(_cask_with_app(), lambda argv: calls.append(list(argv)))
+    assert len(calls) == 2
 
 
 def test_cask_missing_param_raises():

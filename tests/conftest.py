@@ -140,6 +140,12 @@ def no_wezterm_show_keys(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def scratch_system_applications(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The real /Applications never decides an outcome; ~/Applications is the scratch HOME."""
+    monkeypatch.setattr(locations, "SYSTEM_APPLICATIONS", tmp_path / "system-applications")
+
+
+@pytest.fixture(autouse=True)
 def no_iterm2_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test runs the real defaults tool."""
 

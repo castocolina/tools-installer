@@ -148,6 +148,39 @@ def test_default_app_roots_include_user_applications(
     assert is_installed(_app_tool("Tools Installer Probe.app")) is True
 
 
+def test_default_app_roots_are_the_shared_app_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import installer.status as status
+    from installer import locations
+
+    def which_none(cmd: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(status.shutil, "which", which_none)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    assert locations.app_roots() == (
+        tmp_path / "home" / "Applications",
+        locations.SYSTEM_APPLICATIONS,
+    )
+    assert is_installed(_app_tool("Shared Probe.app")) is False
+    (locations.SYSTEM_APPLICATIONS / "Shared Probe.app").mkdir(parents=True)
+    assert is_installed(_app_tool("Shared Probe.app")) is True
+
+
+def test_the_system_applications_constant_is_slash_applications():
+    import importlib.util
+
+    from installer import locations
+
+    # A private copy of the module: the autouse fixture patches the shared one to a scratch dir.
+    spec = importlib.util.spec_from_file_location("locations_pristine", locations.__file__)
+    assert spec is not None and spec.loader is not None
+    pristine = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pristine)
+    assert Path("/Applications") == pristine.SYSTEM_APPLICATIONS
+
+
 def test_cmd_on_path_still_wins_for_app_tools(monkeypatch: pytest.MonkeyPatch):
     import installer.status as status
 

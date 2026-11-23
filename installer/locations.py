@@ -86,9 +86,21 @@ def opt_dir(name: str) -> Path:
     return Path.home() / ".local" / "opt" / name
 
 
+SYSTEM_APPLICATIONS = Path("/Applications")
+
+
 def applications_dir() -> Path:
     """The userspace Applications dir for macOS GUI apps: ~/Applications."""
     return Path.home() / "Applications"
+
+
+def app_roots() -> tuple[Path, ...]:
+    """Where an app bundle counts as present: ~/Applications, then /Applications.
+
+    A drag-installed copy in /Applications counts too, so a userspace duplicate of a system-wide
+    app is never installed. Read at call time; status presence and the cask bundle check share it.
+    """
+    return (applications_dir(), SYSTEM_APPLICATIONS)
 
 
 def rc_paths_for_mode(link_mode: str, shell: str) -> list[Path]:
