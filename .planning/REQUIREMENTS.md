@@ -26,22 +26,22 @@ Research: `.planning/research/SUMMARY.md` (owner decisions recorded below, 2026-
 
 ### Terminals already in the catalog (TERM)
 
-- [ ] **TERM-01**: kitty meets SKILL-01 on both OSes: Option+Left/Right word navigation on macOS without the global switch, the KEYS-03 clear on Cmd+K and on Linux Ctrl+Shift+K (displacing kitty's default `scroll_line_up`, named in the install note), and KEYS-04; its macOS install no longer writes into `/Applications` (SKILL-04).
-- [ ] **TERM-02**: WezTerm meets SKILL-01 on both OSes through its Lua owned region, which extends the user's `config.keys` instead of replacing it; the shell-region marker check matches exact marker lines so the keys region is never taken for it.
-- [ ] **TERM-03**: Alacritty's clear moves to the KEYS-03 behavior (screen and scrollback); its Linux Alt+Left/Right rows stay (owner decision, 2026-11-16: word navigation is required on macOS, optional on Linux, and not extended to other Linux terminals).
+- [x] **TERM-01**: kitty meets SKILL-01 on both OSes: Option+Left/Right word navigation on macOS without the global switch, the KEYS-03 clear on Cmd+K and on Linux Ctrl+Shift+K (displacing kitty's default `scroll_line_up`, named in the install note), and KEYS-04; its macOS install no longer writes into `/Applications` (SKILL-04).
+- [x] **TERM-02**: WezTerm meets SKILL-01 on both OSes through its Lua owned region, which extends the user's `config.keys` instead of replacing it; the shell-region marker check matches exact marker lines so the keys region is never taken for it.
+- [x] **TERM-03**: Alacritty's clear moves to the KEYS-03 behavior (screen and scrollback); its Linux Alt+Left/Right rows stay (owner decision, 2026-11-16: word navigation is required on macOS, optional on Linux, and not extended to other Linux terminals).
 - [ ] **TERM-04**: Konsole is checked, not rewritten: the installer confirms its stock Ctrl+Shift+K clear and writes a binding only when the user has removed it; its zsh sync is unchanged. *(amended 2026-11-19, 29 D-09, needs confirmation: report-only; a user-removed key is kept and reported, never rewritten)*
 - [ ] **TERM-05**: Inside a herdr pane, Option/Alt+Left/Right and the clear shortcut reach the shell (an observable byte-level test); a pass-through setting is written only if herdr intercepts them. *(amended 2026-11-19, 29 D-10: verified live that herdr 0.9.5 does not intercept them)*
 
 ### New terminals (NTERM)
 
 - [ ] **NTERM-01**: Ghostty is in the catalog: the official cask on macOS (user-writable app location), a digest-verified community AppImage on Linux and Bazzite with a visible "community build" note, and pacman on Arch; its shell syncs to zsh on Linux and it meets SKILL-01 through its owned keys region.
-- [ ] **NTERM-02**: iTerm2 is in the catalog as a macOS-only cask with an installer-owned Dynamic Profile that gives Option+Left/Right word navigation through key-map rows *(amended 2026-11-19, 31 D-08, needs confirmation: Option itself stays Normal; Esc+ on Option is the forbidden global switch)*, the KEYS-03 clear, new tabs, windows and panes in the current directory, and the requested color scheme; the profile is made the default profile, and an uninstall restores the previous default.
+- [ ] **NTERM-02**: iTerm2 is in the catalog as a macOS-only cask with an installer-owned Dynamic Profile that gives Option+Left/Right word navigation through key-map rows *(amended 2026-11-19, 31 D-08, needs confirmation: Option itself stays Normal; Esc+ on Option is the forbidden global switch)*, iTerm2's own Cmd+K clear (Clear Buffer, screen and scrollback) *(amended 2026-11-23 per backlog 999.37: the profile's Ctrl+L row only added a scrollback permission dialog)*, new tabs, windows and panes in the current directory, and the requested color scheme; the profile is made the default profile, and an uninstall restores the previous default.
 - [ ] **NTERM-03**: The Herdr desktop app (`herdrdev/herdr-app`) is in the catalog as an entry distinct from the `herdr` multiplexer: a user-scope `install.sh` on Linux and the cask on Apple Silicon macOS; it meets SKILL-01 through its own keys files, displacing its Linux Ctrl+Shift+K picker binding with an install note.
 
 ### Other onboardings (ONB)
 
 - [ ] **ONB-11**: Xcode CLT is detected on macOS and, when missing, the installer shows the exact `xcode-select --install` command for the user to run; it never runs it and offers no uninstall.
-- [ ] **ONB-12**: AWS CLI v2 installs through the official user-scope `install.sh` first (no `--system`, gpg verification kept) with brew `awscli` as the fallback, updates with `aws update`, and an uninstall never touches `~/.aws`.
+- [x] **ONB-12**: AWS CLI v2 installs through the official user-scope `install.sh` first (no `--system`, gpg verification kept) with brew `awscli` as the fallback, updates with `aws update`, and an uninstall never touches `~/.aws`.
 - [ ] **ONB-13**: Bruno installs through the cask on macOS and a digest-verified AppImage per architecture on Linux; the `bru` CLI is out of scope.
 - [ ] **ONB-14**: gh-stack installs with `gh extension install https://github.com/github/gh-stack`, is detected through `gh extension list`, updates with `gh extension upgrade stack`, is removed with `gh extension remove stack` *(amended 2026-11-19, 32 D-10, D-11, needs confirmation: detected by its manifest file and removed by its proven install folder, because list, upgrade and remove need a login)*, and an unauthenticated `gh` never blocks or prompts.
 - [ ] **ONB-15**: Playwright MCP is registered in each agent host present with the pinned `bunx @playwright/mcp@0.0.85`, never overwriting an existing `playwright` server entry; on Bazzite the Flatpak Chrome path is exported when the wrapper exists; a write into `~/.claude/settings.json` asks for consent first.
@@ -121,16 +121,16 @@ Ingested 2026-11-19 from the update-automation todos and `.planning/research/202
 | KEYS-02 | Phase 28 | Complete |
 | KEYS-03 | Phase 28 | Complete |
 | KEYS-04 | Phase 28 | Complete |
-| TERM-01 | Phase 29 | Pending |
-| TERM-02 | Phase 29 | Pending |
-| TERM-03 | Phase 29 | Pending |
+| TERM-01 | Phase 29 | Complete |
+| TERM-02 | Phase 29 | Complete |
+| TERM-03 | Phase 29 | Complete |
 | TERM-04 | Phase 29 | Pending |
 | TERM-05 | Phase 29 | Pending |
 | NTERM-01 | Phase 30 | Pending |
 | NTERM-02 | Phase 31 | Pending |
 | NTERM-03 | Phase 31 | Pending |
 | ONB-11 | Phase 32 | Pending |
-| ONB-12 | Phase 32 | Pending |
+| ONB-12 | Phase 32 | Complete |
 | ONB-13 | Phase 32 | Pending |
 | ONB-14 | Phase 32 | Pending |
 | ONB-15 | Phase 32 | Pending |

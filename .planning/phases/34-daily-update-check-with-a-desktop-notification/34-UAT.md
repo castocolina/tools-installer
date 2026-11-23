@@ -3,7 +3,7 @@ status: testing
 phase: 34-daily-update-check-with-a-desktop-notification
 source: [34-VERIFICATION.md]
 started: 2026-11-22T06:00:00Z
-updated: 2026-11-22T06:00:00Z
+updated: 2026-11-23T12:00:00Z
 ---
 
 ## Current Test
@@ -34,7 +34,8 @@ result: [pending]
 ### 4. Self-check on a real shallow clone (and a real behind-origin checkout)
 expected: Fixed skip category or the installer behind origin/main clause; the checkout is unchanged
 why_human: Unit tests inject git; the container copy has no Git metadata
-result: [pending]
+result: pass
+evidence: Verified live on the owner's Intel Mac (macOS 15.8.3) on 2026-11-23, run by the agent at the owner's direction. Scratch clones: behind-origin and shallow-behind reported the installer is behind origin/main, a current checkout reported nothing, a partial clone reported the `partial clone` skip; no checkout changed.
 
 ### 5. Owner confirmation of the provisional decisions: the 34-0N-SUMMARY.md lines, the eighth row and table height 9, the osascript argv without --, the bus address scope (runner-only, check child only), the self-update skip rules (detached HEAD, non-main, not worktree root, partial clone), a shrinking non-empty set notifying again, the daily limit as timer cadence, the SPEC and ROADMAP amendments, proxy values carried as for every row, uv and manager scratch writes accepted, the confirmed-only membership rule, brew under-reporting (no brew update)
 expected: Each confirmed, or reopened as a follow-up

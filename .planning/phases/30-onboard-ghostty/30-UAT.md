@@ -3,7 +3,7 @@ status: testing
 phase: 30-onboard-ghostty
 source: [30-VERIFICATION.md]
 started: 2026-11-21T03:00:00Z
-updated: 2026-11-21T03:00:00Z
+updated: 2026-11-23T12:00:00Z
 ---
 
 ## Current Test
@@ -18,15 +18,18 @@ awaiting: the owner's Mac (no Mac host in the autonomous run; no agent may mark 
 
 ### 1. Ghostty cask install and uninstall on a real Mac (NTERM-01, 30 D-03)
 expected: Ghostty.app lands in ~/Applications; no CLI link is promised (the CLI stays inside the bundle); uninstall removes the app and the installer-owned config
-result: [pending]
+result: pass
+evidence: Verified live on the owner's Intel Mac (macOS 15.8.3) on 2026-11-23, run by the agent at the owner's direction. Ghostty.app landed in ~/Applications with no CLI link; uninstall removed the app and the installer-created config directory.
 
 ### 2. macOS keys (NTERM-01)
 expected: Cmd+K clears the screen and scrollback; Option+Left and Option+Right move by word (including the Spanish layout); a new tab, window and split open in the same directory
 result: [pending]
+evidence: Partial, 2026-11-23, owner's Mac. Ghostty: Cmd+K and Ctrl+L cleared screen and scrollback with the prompt redrawn, Option+Left/Right moved by word, new tab, window and split opened in the marker directory. Not yet typed: the Spanish-layout `@` (Option+2).
 
 ### 3. macOS effective config (NTERM-01, 30 D-13)
 expected: `~/Applications/Ghostty.app/Contents/MacOS/ghostty +show-config` and `+list-keybinds` show the `super+k` line and no `macos-option-as-alt`; the file the resolver wrote is the one Ghostty reads
 result: [pending]
+evidence: Partial, 2026-11-23, on the owner's Intel Mac: `+list-keybinds` showed `super+k=text:\x0c` and the config held no macos-option-as-alt; `+show-config` was not captured (the app's first-launch Gatekeeper prompt blocked the CLI while the screen was locked).
 
 ### 4. AppImage through the host's FUSE on Bazzite (NTERM-01, 30 D-18)
 expected: the pinned community AppImage mounts through the host's own FUSE and `ghostty --version` prints `Ghostty 1.4.0` (the container run proved extract-and-run only; rootless podman denies the FUSE mount)

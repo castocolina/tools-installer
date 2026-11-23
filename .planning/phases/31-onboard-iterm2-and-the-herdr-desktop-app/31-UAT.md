@@ -3,7 +3,7 @@ status: testing
 phase: 31-onboard-iterm2-and-the-herdr-desktop-app
 source: [31-VERIFICATION.md]
 started: 2026-11-21T09:00:00Z
-updated: 2026-11-21T09:00:00Z
+updated: 2026-11-23T13:00:00Z
 ---
 
 ## Current Test
@@ -18,15 +18,18 @@ awaiting: the owner's Mac (no Mac host in the autonomous run; no agent may mark 
 
 ### 1. Profile loads live and becomes the default (NTERM-02, 31 D-02, D-11)
 expected: iTerm2 loads the Dynamic Profile whether it is running or not and the profile is the default profile
-result: [pending]
+result: pass
+evidence: Verified live on the owner's Intel Mac (macOS 15.8.3) on 2026-11-23 with the owner's real oh-my-zsh prompt, real key events and window screenshots; run by the agent at the owner's direction. iTerm2 loaded tools-installer.json both when started after the file was written and when the file was edited while running; `Default Bookmark Guid` was the installer's profile.
 
 ### 2. Cmd+K clear (NTERM-02)
 expected: Cmd+K sends 0x0c (the screen and scrollback clear through the shell) in a pane of the installer's profile
 result: [pending]
+evidence: Partial, 2026-11-23, owner's Mac. With our Cmd+K row, iTerm2 asks 'Allow clearing scrollback?' and keeps the scrollback until Always Allow. Without the row, iTerm2's native Cmd+K cleared screen and scrollback and the prompt redrew: the row is unnecessary (backlog 999.37).
 
 ### 3. Option+Left and Option+Right move by word (NTERM-02, 31 D-08)
 expected: word moves work through the key-map rows with Option left Normal; the Spanish `@` (Option+2 on that layout) still types
 result: [pending]
+evidence: Partial, 2026-11-23, owner's Mac. iTerm2: Option+Left/Right moved by word (`echo one two Xthree Yfour`). Not yet typed: the Spanish-layout `@` (Option+2).
 
 ### 4. Parent key map and the defaults messages (31 D-09)
 expected: the previous default's key map is merged when readable (2-, 3- and 4-part key spellings match), and `defaults read` of an absent `Default Bookmark Guid` gives the message the code expects (research assumptions A2 and A3)

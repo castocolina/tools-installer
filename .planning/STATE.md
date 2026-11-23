@@ -2,13 +2,13 @@
 gsd_state_version: "1.0"
 milestone: v0.51.0
 milestone_name: Onboard terminal tools
-current_phase: 28
-current_phase_name: Shared terminal-keys mechanism
+current_phase: 35
+current_phase_name: Opt-in auto-update
 status: verifying
-stopped_at: Completed 28-03-PLAN.md
+stopped_at: Phases 27-35 executed; UAT and owner decisions pending (milestone audit 2026-11-23)
 last_updated: "2026-11-20T13:42:35.352Z"
-last_activity: 2026-11-20
-last_activity_desc: Phase 28 execution started
+last_activity: 2026-11-23
+last_activity_desc: Completed quick task 261123-f27: macOS terminal debt and tool-onboarding skill lift
 state_head: ce04ce72b7119f8c9149a35c8b9a75635709c86f
 progress:
   total_phases: 9
@@ -25,14 +25,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-16)
 
 **Core value:** A developer can go from a bare machine to a working, correctly-ordered install (system prerequisites -> user tools -> AI-agent tooling) entirely through the catalog, with dependency drag-in resolving automatically and no manual ordering knowledge required, and every screen tells the truth about what is on the host.
-**Current focus:** Phase 28 — Shared terminal-keys mechanism
+**Current focus:** Milestone v0.51.0: phases 27-35 are executed and every phase is human_needed; the work left is UAT on the owner's Mac and Bazzite, the owner-decision items and backlog 999.37-999.39 (see .planning/v0.51.0-MILESTONE-AUDIT.md)
 
 ## Current Position
 
-Phase: 28 (Shared terminal-keys mechanism) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-11-20 — Phase 28 execution started
+Phase: 35 (Opt-in auto-update) — executed, needs review; phases 27-34 executed and human_needed
+Status: Awaiting UAT and owner decisions
+Last activity: 2026-11-23 — Completed quick task 261123-f27
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -131,6 +130,12 @@ Recent decisions affecting current work:
 - Phase 23.2 inserted after Phase 23: Install-time tuning instead of Policies knobs; live progress indicator
 - Phase 24.2 inserted after Phase 24: Schedules view: cache cleanup, agent-CLI updates, cursor-agent shim
 - Phase 24.3 inserted after Phase 24: Catalog audit skill; opencode v2 and Pi MCP
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 261123-f27 | Close the v0.51.0 macOS terminal debt (iTerm2 Cmd+K row, gone-cask INSTALLED, WezTerm shadowed chord, quarantine docstring) and lift the tool-onboarding skill to 80%+ | 2026-11-23 | d6ab210c | Needs Review | [261123-f27-close-v0-51-0-macos-terminal-debt-drop-t](./quick/261123-f27-close-v0-51-0-macos-terminal-debt-drop-t/) |
 
 ## Deferred Items
 

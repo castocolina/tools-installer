@@ -946,3 +946,44 @@ Plans:
 - accepted limits stated in the docs: vendor updaters that start their own session, the same-user advisory-lock residual, the pnpm replay and grouped package effects counted as planned tools only, a manager upgrade touching its own dependents, uncapped output capture, an uncredential-scrubbed 0600 run log, the first night's real outdated set;
 - the AUTOUPD-08 real run is on record in a disposable Fedora container (uv 0.11.0 to 0.13.9 through the real `uv run` chain, ruff 0.1.0 to 0.17.6, shell rc unchanged, the same-day rerun skipped); macOS, a real Bazzite host, a real desktop notification and the 03:00 timer remain owner UAT.
 **Depends on:** Phase 35.
+
+### Phase 999.37: macOS terminal live-verification findings (BACKLOG)
+
+**Goal:** Close the defects the owner's real-Mac run found in the terminal defaults (2026-11-23, Intel Mac, macOS 15.8.3, real oh-my-zsh prompt, real key events and screenshots).
+**Requirements:** TBD
+**Source:** The live check of iTerm2, kitty, Ghostty and WezTerm on the owner's Mac (UATs 29, 30 and 31):
+**DONE (92de98d8, checked live on five terminals):** - **Fixed in the working tree, commit and recheck:** the Ctrl+L widget sent `ESC[3J` after the redraw and kitty wiped the prompt with it; it now sends `ESC[H ESC[2J ESC[3J` once, then redraws (`installer/tweaks.py`). Recheck the four terminals with the real prompt and the scrollback wheel, and confirm 28#2 (`ESC[2J` before `ESC[3J`) still holds.
+**DONE (92de98d8; the UAT line stays for the owner's Mac):** - **Fixed in the working tree, commit and add a UAT line:** iTerm2 stops on "No valid UNIX locale exists for your computer's current language and country" in every new session when the system region has no UNIX locale (here `en_CL`); the profile now sets `Set Local Environment Vars` 2 and `Custom Locale` `en_US.UTF-8` only in that case (`iterm2_profile.locale_needs_pin`).
+**DONE (3021f942) except the Ctrl+L scrollback decision, still open:** - iTerm2: **verified 2026-11-23** that its native Cmd+K clears screen and scrollback and the prompt redraws, while our Cmd+K row (Ctrl+L) makes it ask before clearing scrollback (`PreventEscapeSequenceFromClearingHistory`). Drop the Cmd+K row from `OWN_ROWS` (`installer/iterm2_profile.py`), its goldens and the install note, and fix the NTERM-02 text. The Ctrl+L widget (KEYS-03) still cannot erase iTerm2's scrollback until the owner allows it once: decide between writing that preference and documenting the prompt.
+- iTerm2 profile extras to verify on a real Mac and add when missing: wheel scrolling in a pager (alternate screen), a click on a link opening the default browser, and the "Check for updates automatically?" choice (the owner's, not ours).
+**DONE (23a167f1):** - `engine.install_tool` reports INSTALLED when `brew install --cask` is a no-op because the Caskroom still lists a cask whose bundle is gone; the post-install then wrote the profile and made it the default for an absent app. Check the bundle after a cask install and before any post-install.
+**DONE (f91947b4):** - WezTerm: a user config that binds Super+K and then adds a `DisableDefaultAssignment` for the same chord leaves Cmd+K unbound; the region skips the chord as taken and nothing says so. Make the readback fail a chord that `wezterm show-keys` does not list.
+**DONE (23a167f1) for the docstring; naming the prompt in the cask install note is still open:** - `installer/apps.py` says installed apps skip the Gatekeeper dialog "identical to `brew install --cask`"; Homebrew 7 leaves `com.apple.quarantine` on cask bundles (kitty.app), so every fresh cask install asks once. Correct the docstring and name the prompt in the install notes.
+- A reusable macOS key-and-screenshot check (System Events keys, scroll-wheel events, a dialog handler, a Gatekeeper click) exists only in the session scratch; decide whether it joins 999.35 as a script.
+- **Verified live 2026-11-23:** new tab, window and split open in the shell's directory in kitty, Ghostty, iTerm2 (all three) and WezTerm (tab and window; it has no default split chord), and Alacritty's new window does. The Spanish-layout `@` (Option+2) is not yet typed in any terminal (30#2, 31#3).
+**Depends on:** Phases 28, 29, 30, 31.
+
+### Phase 999.38: Alacritty on macOS: a dmg install method (BACKLOG)
+
+**Goal:** Make Alacritty installable on macOS like on Linux (the skill's parity rule: a tool is guaranteed on both unless it exists for one OS only).
+**Requirements:** TBD
+**Source:** Owner decision 2026-11-23. The Homebrew cask `alacritty` has been disabled since 2026-09-01 (the unsigned build fails Gatekeeper, alacritty issue 8749), and the installer has no `dmg` kind; `tests/test_registry.py` keeps `NO_MACOS = {"alacritty"}` and the skill's closed table says "no macOS method". The upstream release ships a macOS DMG (v0.17.0). A file fetched with curl carries no quarantine, so a digest-pinned DMG placed in `~/Applications` launches without the Gatekeeper prompt:
+- a `dmg` method kind: download, verify sha256, `hdiutil attach -nobrowse -readonly`, `ditto` the bundle into `~/Applications`, detach, link the CLI into `~/.local/bin`, with update and uninstall paths (the `app` kind in `installer/apps.py` is the model);
+- the Alacritty entry gets its macOS method and leaves `NO_MACOS`; its keys row gains the macOS word navigation the owner requires (2026-11-16) and Cmd+K as the clear chord, and TERM-03 is verified on a real Mac;
+- the skill's per-terminal table row and `# Verified` line are updated in the same change.
+**Depends on:** Phase 29.
+
+### Phase 999.39: tool-onboarding skill-judge findings (BACKLOG)
+
+**Goal:** Keep the `tool-onboarding` skill above the 80% pass line and close the structural findings the judges agreed on.
+**Requirements:** TBD
+**Source:** Skill-judge, rubric v5, 125 points. 2026-11-23, before the quick task: Opus 68.8% (D); pi referees from the owner's Terminal 70.4% (C), 80.0% (B), 67.2% (D) (the referee prompt said 120 points, so two totals were recomputed on 125). After quick 261123-f27 (evals, `references/terminal-defaults.md`, gap status word, description, three dialog groups): Opus round 3 82.4% (B), round 4 84.0% (B), round 5 82.4% (B). Pi cannot reach the router from the agent session (macOS Local Network); the owner runs `judge/run-referees.sh` in Terminal. Owner decision 2026-11-23: the judge panel is a local Opus subagent plus `my-referee-one` and `my-referee-two`; `my-referee-three` is `claude-opus-5-5-high`, the same model family as the local Opus judge, so it is not used.
+**Done (quick 261123-f27, f77d66fd, 2fa23dfe):** evals and trigger queries; the per-terminal table moved to `references/`; the `gap (backlog 999.x)` word; a new description; the dialog paragraph split in three groups; the real-Mac checks all deferred to UAT lines (AGENTS.md); `MACOS_ONLY` and the gap sets named in step 3; rule (c) sends Ctrl+L only where the vendor chord does not clear both.
+**Open:**
+- D5: SKILL.md is still about 6.5k tokens against the 5k guideline. Move the step 4b method-kind table with its TOML examples, the "macOS apps" subsection and "Where an accepted customization lives" into `references/` files read at their steps, and repoint the tests.
+- D1: drop the phase-history phrases (phase 28 moved the partial line, KEYS-03, TERM-01, TUNE-04, SKILL-07) after updating `test_conflicts_names_the_real_partial_lines`, and cut step 1 to its project-specific part.
+- D3: a `## Gotchas` section for the environment facts (Spanish layout, kitty `ESC[3J`, Homebrew quarantine, the `en_CL` locale dialog).
+- D2: a progress checklist for steps 1-9. D6: the exact container install sequence in step 9.
+- D8: source URL and check date for the version-sensitive vendor defaults (Ghostty, herdr-app, iTerm2, WezTerm source versions, Homebrew quarantine); the iTerm2 shell cell should be `n/a` (rule (a) is Linux-only; update `test_iterm2_row_records_what_is_proven`); step 2 and step 5-6 are skipped by the review path; the live-Mac lines at 114 and 325 should open as a UAT line to write, not an agent imperative.
+- Rerun skill-judge after each change, with Opus subagents for an unbiased read; the earlier phase-27 verdicts used rubric v4.
+**Depends on:** 999.37.
