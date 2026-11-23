@@ -66,9 +66,8 @@ def test_zsh_clear_widget_text() -> None:
     assert bundle is not None
     assert bundle.platforms == ()
     data = tweak_block(bundle).encode()
-    assert data.index(rb"\033[H\033[2J") < data.index(b"zle .reset-prompt")
+    assert data.index(rb"\033[H\033[2J\033[3J") < data.index(b"zle .reset-prompt")
     assert data.index(b"zle .reset-prompt") < data.index(b"zle -R")
-    assert data.index(b"zle -R") < data.index(rb"\033[3J")
     assert b"\x1b" not in data
     assert b'if [ -n "${ZSH_VERSION-}" ]; then' in bundle.body.encode()
     assert b"zle -N tools_installer_clear_all" in bundle.body.encode()
@@ -132,15 +131,13 @@ def test_clear_widget_emits_the_exact_bytes_in_zsh() -> None:
     lines = [
         line.strip() for line in bundle.body.split("\n") if line.strip().startswith("print -n '")
     ]
-    assert len(lines) == 2
+    assert len(lines) == 1
     results = [
         subprocess.run(["zsh", "-f", "-c", line], capture_output=True, check=False)
         for line in lines
     ]
-    assert [result.returncode for result in results] == [0, 0], [
-        result.stderr for result in results
-    ]
-    assert [result.stdout for result in results] == [b"\x1b[H\x1b[2J", b"\x1b[3J"]
+    assert [result.returncode for result in results] == [0], [result.stderr for result in results]
+    assert [result.stdout for result in results] == [b"\x1b[H\x1b[2J\x1b[3J"]
 
 
 @pytest.mark.parametrize(

@@ -15,8 +15,8 @@ from installer.terminal_regions import Restored, TerminalShellError
 REAL_DEFAULTS = iterm2_profile.iterm2_defaults
 
 GUID = "AAAAAAAA-0000-4000-8000-000000000001"
+RETIRED = {"0x6b-0x100000": {"Action": 11, "Text": "0x0c"}}
 ROWS: dict[str, object] = {
-    "0x6b-0x100000": {"Action": 11, "Text": "0x0c"},
     "0xf702-0x280000": {"Action": 10, "Text": "b"},
     "0xf703-0x280000": {"Action": 10, "Text": "f"},
 }
@@ -54,10 +54,6 @@ GOLDEN = """{
       },
       "Guid": "6CB8584E-9B4C-4CF6-892A-D21E8AFE908C",
       "Keyboard Map": {
-        "0x6b-0x100000": {
-          "Action": 11,
-          "Text": "0x0c"
-        },
         "0xf702-0x280000": {
           "Action": 10,
           "Text": "b"
@@ -119,10 +115,6 @@ PARENT_GOLDEN = """{
           "Action": 10,
           "Text": "y"
         },
-        "0x6b-0x100000": {
-          "Action": 11,
-          "Text": "0x0c"
-        },
         "0xf702-0x280000-0x7b-0x0": {
           "Action": 10,
           "Text": "x"
@@ -178,11 +170,7 @@ def test_the_profile_golden_with_a_parent_and_a_merged_map() -> None:
     }
     rows, clashes = iterm2_profile.merge_rows(parent)
     assert clashes == ("option+left",)
-    assert rows == {
-        **parent,
-        "0x6b-0x100000": ROWS["0x6b-0x100000"],
-        "0xf703-0x280000": ROWS["0xf703-0x280000"],
-    }
+    assert rows == {**parent, "0xf703-0x280000": ROWS["0xf703-0x280000"]}
     assert (
         iterm2_profile.iterm2_profile_text(
             ProfileState(GUID, GUID, True, False, rows), recycle=True
@@ -191,13 +179,41 @@ def test_the_profile_golden_with_a_parent_and_a_merged_map() -> None:
     )
 
 
-def test_a_parent_row_with_the_same_action_is_not_a_clash() -> None:
-    rows, clashes = iterm2_profile.merge_rows(
-        {"0x6b-0x100000-0x28": {"Action": 11, "Text": "0x0c"}}
-    )
+def test_the_own_rows_are_the_two_option_rows_only() -> None:
+    rows, clashes = iterm2_profile.merge_rows({})
+    assert rows == ROWS
     assert not clashes
-    assert "0x6b-0x100000" not in rows
-    assert rows["0x6b-0x100000-0x28"] == {"Action": 11, "Text": "0x0c"}
+    assert not any(key.startswith("0x6b-") for key in rows)
+
+
+def test_a_parent_row_with_the_same_action_is_not_a_clash() -> None:
+    rows, clashes = iterm2_profile.merge_rows({"0xf703-0x280000-0x28": {"Action": 10, "Text": "f"}})
+    assert not clashes
+    assert "0xf703-0x280000" not in rows
+    assert rows["0xf703-0x280000-0x28"] == {"Action": 10, "Text": "f"}
+
+
+def test_a_parent_cmd_k_row_is_kept_unchanged_with_no_clash() -> None:
+    parent = {"0x6b-0x100000": {"Action": 99}}
+    rows, clashes = iterm2_profile.merge_rows(parent)
+    assert not clashes
+    assert rows["0x6b-0x100000"] == {"Action": 99}
+
+
+def test_the_retired_cmd_k_pair_is_dropped_from_the_render() -> None:
+    old = {**RETIRED, **ROWS}
+    text = iterm2_profile.iterm2_profile_text(
+        ProfileState(None, None, False, False, old), recycle=True
+    )
+    assert text == GOLDEN
+
+
+def test_a_user_row_under_the_retired_key_survives_the_render() -> None:
+    rows = {**ROWS, "0x6b-0x100000": {"Action": 99}}
+    text = iterm2_profile.iterm2_profile_text(
+        ProfileState(None, None, False, False, rows), recycle=True
+    )
+    assert json.loads(text)["Profiles"][0]["Keyboard Map"]["0x6b-0x100000"] == {"Action": 99}
 
 
 def test_keystrokes_compare_by_character_and_masked_flags() -> None:
@@ -665,8 +681,17 @@ def test_a_clash_with_a_parent_row_is_reported_by_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = setup_fake(monkeypatch)
+    fake.bookmarks = [{"Guid": GUID, "Keyboard Map": {"0xf702-0x280000": {"Action": 99}}}]
+    assert "iterm2: partial: you already bind option+left" in before(tmp_path)
+    assert state(tmp_path).rows["0xf702-0x280000"] == {"Action": 99}
+
+
+def test_a_previous_default_cmd_k_binding_is_kept_with_no_clash_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = setup_fake(monkeypatch)
     fake.bookmarks = [{"Guid": GUID, "Keyboard Map": {"0x6b-0x100000": {"Action": 99}}}]
-    assert "iterm2: partial: you already bind cmd+k" in before(tmp_path)
+    assert "iterm2: partial: you already bind cmd+k" not in before(tmp_path)
     assert state(tmp_path).rows["0x6b-0x100000"] == {"Action": 99}
 
 
@@ -822,3 +847,29 @@ def test_without_a_fake_every_defaults_call_fails_closed(tmp_path: Path) -> None
     assert exc.value.returncode == 127
     assert before(tmp_path)[0].startswith("iterm2: partial: could not read your default profile")
     assert not state(tmp_path).default_set
+
+
+def test_a_system_region_without_a_unix_locale_pins_the_profile_locale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def region(_argv: Sequence[str]) -> str:
+        return "en_CL\n"
+
+    monkeypatch.setattr(iterm2_profile, "iterm2_defaults", region)
+    assert iterm2_profile.locale_needs_pin(tmp_path)
+    (tmp_path / "en_CL.UTF-8").mkdir()
+    assert not iterm2_profile.locale_needs_pin(tmp_path)
+
+
+def test_an_unreadable_system_region_pins_nothing(tmp_path: Path) -> None:
+    # The autouse fixture makes every defaults call fail, as on a host without the tool.
+    assert not iterm2_profile.locale_needs_pin(tmp_path)
+
+
+def test_the_pinned_profile_carries_the_custom_locale_and_the_plain_one_does_not() -> None:
+    state = ProfileState(None, None, False, False, ROWS)
+    pinned = json.loads(iterm2_profile.iterm2_profile_text(state, recycle=True, pin_locale=True))
+    plain = json.loads(iterm2_profile.iterm2_profile_text(state, recycle=True))
+    assert pinned["Profiles"][0]["Set Local Environment Vars"] == 2
+    assert pinned["Profiles"][0]["Custom Locale"] == "en_US.UTF-8"
+    assert not {"Set Local Environment Vars", "Custom Locale"} & plain["Profiles"][0].keys()

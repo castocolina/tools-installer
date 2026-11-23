@@ -47,6 +47,7 @@ from installer.iterm2_profile import (
     hook_switch_pending,
     iterm2_profile_text,
     iterm2_proof,
+    locale_needs_pin,
     merge_rows,
     profile_path,
     read_state,
@@ -94,6 +95,7 @@ from installer.terminal_regions import (
     validate_toml,
     validate_wezterm,
     wezterm_config_path,
+    wezterm_disabled_chords,
     wezterm_keys_body,
     wezterm_readback,
     xdg_data_home,
@@ -346,8 +348,10 @@ def _wezterm_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> P
 
 
 def _wezterm_plan(platform_os: str, text: str, path: Path) -> KeysPlan:
-    del text, path
-    return KeysPlan(wezterm_keys_body(_wezterm_rows(platform_os)))
+    del path
+    rows = _wezterm_rows(platform_os)
+    disabled = wezterm_disabled_chords(text, rows)
+    return KeysPlan(wezterm_keys_body(rows), tuple(line for _, line in disabled))
 
 
 def wezterm_show_keys(path: Path) -> str | None:
@@ -365,7 +369,15 @@ def _wezterm_readback(platform_os: str, path: Path) -> tuple[str, ...]:
         output = wezterm_show_keys(path)
     except CommandError:
         return (WEZTERM_UNVERIFIED,)
-    return () if output is None else wezterm_readback(output, _wezterm_rows(platform_os))
+    if output is None:
+        return ()
+    rows = _wezterm_rows(platform_os)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    reported = (chord for chord, _ in wezterm_disabled_chords(text, rows))
+    return wezterm_readback(output, rows, frozenset(reported))
 
 
 def _iterm2_path(platform_os: str, home: Path, environ: Mapping[str, str]) -> Path:
@@ -378,12 +390,22 @@ def _iterm2_plan(
 ) -> KeysPlan:
     del platform_os, text, path
     state = read_state(home, environ) or ProfileState(None, None, False, False, merge_rows({})[0])
+    pin = locale_needs_pin()
     return KeysPlan(
         iterm2_profile_text(
-            state, recycle=isinstance(TERMINAL_KEYS["iterm2"].same_directory, Writes)
+            state,
+            recycle=isinstance(TERMINAL_KEYS["iterm2"].same_directory, Writes),
+            pin_locale=pin,
         ),
         notes=(
-            "iterm2: cmd+k now sends Ctrl+L instead of the Clear Buffer menu item.",
+            *(
+                (
+                    "iterm2: your system region has no UNIX locale, so the profile sets LANG to "
+                    "en_US.UTF-8 instead of asking in a dialog.",
+                )
+                if pin
+                else ()
+            ),
             "iterm2: changes made in the iTerm2 settings window do not stick (a Dynamic Profile).",
             "iterm2: iTerm2 skips a Dynamic Profiles file it cannot parse and reports it.",
             "iterm2: iTerm2 quits when it is removed; uninstall it from another terminal "
@@ -510,12 +532,13 @@ TERMINAL_KEYS: Final[dict[str, KeysRow]] = {
         validate=validate_iterm2,
         summary=(
             "iTerm2 profile: tools-installer (Option+Left and Option+Right move by word with "
-            "Option left Normal, Cmd+K sends Ctrl+L to clear the screen and scrollback, "
+            "Option left Normal, iTerm2's own Cmd+K clears the screen and the scrollback, "
             "new tabs, windows and panes open in the current directory); it becomes your "
             "default profile unless a partial line says otherwise."
         ),
         created_record=ITERM2_CREATED,
         same_directory=Writes('"Custom Directory": "Recycle"'),
+        clear="Clear Buffer",
     ),
     "herdr-app": KeysRow(
         ownership=OwnedKeys(

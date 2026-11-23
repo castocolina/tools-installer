@@ -816,7 +816,7 @@ NO_DEBIAN_FEDORA_ARM64 = {"wezterm"}
 # since 2026-09-01 (unsigned build fails Gatekeeper). No formula exists, and
 # the GitHub release has no macOS asset this installer can place. Linux uses
 # the distro package. Membership means no reviewed macOS method, not that
-# Alacritty cannot run on macOS.
+# Alacritty cannot run on macOS. It is a platform gap, not a scope choice (backlog 999.38).
 NO_MACOS = {"alacritty"}
 
 

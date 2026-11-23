@@ -112,17 +112,18 @@ _VOLTA_BODY = (
 # command of the sourced block when nvim is absent.
 _NVIM_EDITOR_BODY = "if command -v nvim >/dev/null; then\n  export EDITOR=nvim VISUAL=nvim\nfi"
 
-# Ctrl+L clears the screen, redraws the prompt and buffer, then clears scrollback. Bind all three
+# Ctrl+L clears the screen and the scrollback in one write, then redraws the prompt and buffer. The
+# erase comes first because kitty's ESC[3J also wipes the visible screen: sent after the redraw it
+# erased the prompt (real-Mac check, 2026-11-23). Bind all three
 # keymaps because Oh-My-Zsh runs bindkey -e and the Neovim bundle exports EDITOR=nvim. Bash also
 # sources ~/.myshellrc, so the nounset-safe guard keeps it out when ZSH_VERSION is unset.
 _ZSH_CLEAR_BODY = (
     "if command -v zsh >/dev/null; then\n"
     r'  if [ -n "${ZSH_VERSION-}" ]; then' + "\n"
     "    tools_installer_clear_all() {\n"
-    r"      print -n '\033[H\033[2J'" + "\n"
+    r"      print -n '\033[H\033[2J\033[3J'" + "\n"
     "      zle .reset-prompt\n"
     "      zle -R\n"
-    r"      print -n '\033[3J'" + "\n"
     "    }\n"
     "    zle -N tools_installer_clear_all\n"
     "    for _ti_map in emacs viins vicmd; do\n"

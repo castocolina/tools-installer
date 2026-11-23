@@ -52,6 +52,7 @@ from installer.terminal_regions import (
     validate_wezterm,
     wezterm_chord,
     wezterm_config_path,
+    wezterm_disabled_chords,
     wezterm_keys_body,
 )
 from installer.terminal_shell import sync_terminal_shells
@@ -1407,7 +1408,88 @@ def test_wezterm_readback_notes_a_missing_chord(monkeypatch: pytest.MonkeyPatch)
         _show_keys("    { key = 'k', mods = 'SUPER', action = act.SendString '\\f' },\n"),
     )
     macos = Platform(os="macos", arch="arm64", immutable=False, has_brew=True, os_version="14.0")
-    assert run_post_install(_wezterm(), macos).lines == (_WEZTERM_SUMMARY, WEZTERM_UNVERIFIED)
+    assert run_post_install(_wezterm(), macos).lines == (
+        _WEZTERM_SUMMARY,
+        "wezterm: partial: wezterm show-keys does not list ALT+LeftArrow; your config removes it",
+        "wezterm: partial: wezterm show-keys does not list ALT+RightArrow; your config removes it",
+    )
+
+
+def test_wezterm_readback_reports_a_chord_listed_as_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_show_keys(
+        monkeypatch,
+        _show_keys(
+            "    { key = 'k', mods = 'SUPER', action = act.DisableDefaultAssignment },\n"
+            "    { key = 'LeftArrow', mods = 'ALT', action = act.SendString '\\u{1b}b' },\n"
+            "    { key = 'RightArrow', mods = 'ALT', action = act.SendString '\\u{1b}f' },\n"
+        ),
+    )
+    assert run_post_install(_wezterm(), _MACOS).lines[1:] == (
+        "wezterm: partial: wezterm show-keys lists SUPER+k as DisableDefaultAssignment; "
+        "your config disables it; kept yours",
+    )
+
+
+_WEZTERM_DISABLED = (
+    'local wezterm = require "wezterm"\n'
+    "local act = wezterm.action\n"
+    "local config = {}\n"
+    "config.keys = {\n"
+    "  { key = 'k', mods = 'SUPER', action = act.SendString 'x' },\n"
+    "  { key = 'k', mods = 'SUPER', action = act.DisableDefaultAssignment },\n"
+    "}\n"
+    "return config\n"
+)
+_WEZTERM_DISABLED_LINE = (
+    "wezterm: partial: your config disables SUPER+k (DisableDefaultAssignment); kept yours"
+)
+
+
+def test_a_disabled_chord_is_a_partial_line_without_wezterm_on_the_path() -> None:
+    config = _wezterm_config()
+    config.parent.mkdir(parents=True)
+    config.write_text(_WEZTERM_DISABLED)
+    lines = run_post_install(_wezterm(), _MACOS).lines
+    assert lines.count(_WEZTERM_DISABLED_LINE) == 1
+    assert not any("show-keys" in line for line in lines)
+
+
+def test_a_chord_the_static_scan_reported_is_not_reported_twice_by_the_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _wezterm_config()
+    config.parent.mkdir(parents=True)
+    config.write_text(_WEZTERM_DISABLED)
+    _patch_show_keys(
+        monkeypatch,
+        _show_keys(
+            "    { key = 'LeftArrow', mods = 'ALT', action = act.SendString '\\u{1b}b' },\n"
+            "    { key = 'RightArrow', mods = 'ALT', action = act.SendString '\\u{1b}f' },\n"
+        ),
+    )
+    lines = run_post_install(_wezterm(), _MACOS).lines
+    assert [line for line in lines if "SUPER+k" in line] == [_WEZTERM_DISABLED_LINE]
+
+
+def test_the_scan_reads_either_order_and_quote_and_skips_comments_and_the_region() -> None:
+    rows = (("k", "SUPER", "\x0c"), ("LeftArrow", "OPT", "\x1bb"))
+    text = (
+        '{ mods = "CMD", key = "k", action = act.DisableDefaultAssignment },\n'
+        "-- { key = 'LeftArrow', mods = 'ALT', action = act.DisableDefaultAssignment },\n"
+        "{ key = 'x', mods = 'SUPER', action = act.DisableDefaultAssignment },\n"
+        "-- >>> tools-installer terminal-shell wezterm-keys >>>\n"
+        "{ key = 'LeftArrow', mods = 'ALT', action = act.DisableDefaultAssignment },\n"
+        "-- <<< tools-installer terminal-shell wezterm-keys <<<\n"
+    )
+    assert wezterm_disabled_chords(text, rows) == (("k/SUPER", _WEZTERM_DISABLED_LINE),)
+    option = "{ key = 'LeftArrow', mods = 'OPT', action = act.DisableDefaultAssignment },\n"
+    assert wezterm_disabled_chords(option, rows)[0][1] == (
+        "wezterm: partial: your config disables ALT+LeftArrow (DisableDefaultAssignment); "
+        "kept yours"
+    )
+    assert wezterm_disabled_chords("", rows) == ()
 
 
 def test_wezterm_readback_runs_nothing_without_wezterm() -> None:

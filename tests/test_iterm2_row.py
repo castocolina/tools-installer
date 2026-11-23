@@ -2,9 +2,11 @@
 
 import inspect
 import io
+import json
 import os
 import plistlib
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -154,8 +156,8 @@ def test_a_fresh_iterm2_install_writes_the_golden_profile(monkeypatch: pytest.Mo
     fake = fake_defaults(monkeypatch)
     result = run_post_install(tool(), MAC)
     assert result.warning is None and result.lines[0] == TERMINAL_KEYS["iterm2"].summary
+    assert "Ctrl+L" not in " ".join(result.lines)
     assert result.lines[1:] == (
-        "iterm2: cmd+k now sends Ctrl+L instead of the Clear Buffer menu item.",
         "iterm2: changes made in the iTerm2 settings window do not stick (a Dynamic Profile).",
         "iterm2: iTerm2 skips a Dynamic Profiles file it cannot parse and reports it.",
         "iterm2: iTerm2 quits when it is removed; uninstall it from another terminal "
@@ -166,6 +168,69 @@ def test_a_fresh_iterm2_install_writes_the_golden_profile(monkeypatch: pytest.Mo
         profile.ProfileState(None, None, True, True, rows), recycle=True
     )
     assert pending() is None and fake.prefs[profile.DEFAULT_GUID_KEY] == profile.ITERM2_GUID
+    keymap = json.loads(profile.profile_path(Path.home()).read_text())["Profiles"][0][
+        "Keyboard Map"
+    ]
+    assert set(keymap) == {"0xf702-0x280000", "0xf703-0x280000"}
+
+
+RETIRED_KEY = "0x6b-0x100000"
+RETIRED_ROW = {"Action": 11, "Text": "0x0c"}
+USER_KEY = "0x61-0x40000"
+
+
+def plant_pre_change_install() -> None:
+    """Rewrite a fresh install's profile and record into the shape written before backlog 999.37."""
+    old = profile.read_state(Path.home(), os.environ)
+    assert old is not None
+    rows = {RETIRED_KEY: RETIRED_ROW, USER_KEY: {"Action": 10, "Text": "y"}, **old.rows}
+    profile.write_state(Path.home(), os.environ, replace(old, rows=rows))
+    path = profile.profile_path(Path.home())
+    document = json.loads(path.read_text())
+    document["Profiles"][0]["Keyboard Map"] = rows
+    path.write_text(json.dumps(document, sort_keys=True, indent=2, ensure_ascii=False) + "\n")
+
+
+def test_a_pre_change_profile_reads_as_drift_and_a_reconfigure_drops_the_cmd_k_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_defaults(monkeypatch, GUID)
+    run_post_install(tool(), MAC)
+    plant_pre_change_install()
+    path = profile.profile_path(Path.home())
+    assert RETIRED_KEY in path.read_text() and pending() == KEYS_PENDING
+    apply_install_tuning(tool(), MAC, skip_recorded=True)
+    keymap = json.loads(path.read_text())["Profiles"][0]["Keyboard Map"]
+    assert RETIRED_KEY not in keymap
+    assert keymap["0xf702-0x280000"] == {"Action": 10, "Text": "b"}
+    assert keymap["0xf703-0x280000"] == {"Action": 10, "Text": "f"}
+    assert keymap[USER_KEY] == {"Action": 10, "Text": "y"}
+    assert pending() is None
+
+
+def test_strip_still_removes_a_pre_change_profile_and_restores_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = prepare_home()
+    fake = fake_defaults(monkeypatch, GUID)
+    run_post_install(tool(), MAC)
+    plant_pre_change_install()
+    assert strip() == ()
+    assert fake.prefs[profile.DEFAULT_GUID_KEY] == GUID
+    assert_clean(start)
+
+
+def test_perform_uninstall_still_removes_a_pre_change_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = prepare_home()
+    fake, t = setup_removal(monkeypatch)
+    plant_pre_change_install()
+    fake.calls.clear()
+    failed, _, _ = route(t, fake.calls)
+    assert not failed
+    assert fake.prefs[profile.DEFAULT_GUID_KEY] == GUID
+    assert_clean(start)
 
 
 def test_a_foreign_iterm2_profile_is_refused_and_left_byte_for_byte(

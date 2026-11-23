@@ -23,13 +23,19 @@ ITERM2_GUID: Final = "6CB8584E-9B4C-4CF6-892A-D21E8AFE908C"
 PROFILE_NAME: Final = "tools-installer"
 PROFILE_FILE: Final = "tools-installer.json"
 ITERM2_CREATED: Final = "terminal-iterm2-created"
+FALLBACK_LOCALE: Final = "en_US.UTF-8"
+LOCALE_ROOT: Final = Path("/usr/share/locale")
 STATE_RECORD: Final = "terminal-iterm2-default"
 MODIFIER_MASK: Final = 0x1E0000
 OWN_ROWS: Final = (
-    ("cmd+k", "0x6b-0x100000", {"Action": 11, "Text": "0x0c"}),
     ("option+left", "0xf702-0x280000", {"Action": 10, "Text": "b"}),
     ("option+right", "0xf703-0x280000", {"Action": 10, "Text": "f"}),
 )
+# Records written before backlog 999.37 still carry this pair, so iterm2_profile_text drops it and
+# a reconfigure rewrites the profile without it. A previous default that bound exactly this pair
+# under exactly this key is indistinguishable from ours and is dropped too; iTerm2's own Cmd+K
+# still clears.
+RETIRED_ROWS: Final = (("cmd+k", "0x6b-0x100000", {"Action": 11, "Text": "0x0c"}),)
 
 
 def color(red: float, green: float, blue: float) -> dict[str, object]:
@@ -125,7 +131,17 @@ def parent_rows(plist_text: str, guid: str) -> dict[str, object] | None:
     return None
 
 
-def iterm2_profile_text(state: ProfileState, *, recycle: bool) -> str:
+def without_retired_rows(rows: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in rows.items()
+        if not any(
+            key == retired and same_value(value, action) for _, retired, action in RETIRED_ROWS
+        )
+    }
+
+
+def iterm2_profile_text(state: ProfileState, *, recycle: bool, pin_locale: bool = False) -> str:
     profile: dict[str, object] = {
         "Background Color": BACKGROUND,
         "Bold Color": BOLD,
@@ -134,14 +150,27 @@ def iterm2_profile_text(state: ProfileState, *, recycle: bool) -> str:
         "Selection Color": SELECTION,
         "Guid": ITERM2_GUID,
         "Name": PROFILE_NAME,
-        "Keyboard Map": state.rows,
+        "Keyboard Map": without_retired_rows(state.rows),
         "Use Separate Colors for Light and Dark Mode": False,
     }
     if recycle:
         profile["Custom Directory"] = "Recycle"
+    if pin_locale:
+        # 2 is iTerm2's "custom locale"; the default asks in a dialog on every new session.
+        profile["Set Local Environment Vars"] = 2
+        profile["Custom Locale"] = FALLBACK_LOCALE
     if state.parent is not None:
         profile["Dynamic Profile Parent GUID"] = state.parent
     return json.dumps({"Profiles": [profile]}, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+
+
+def locale_needs_pin(root: Path = LOCALE_ROOT) -> bool:
+    """True when the system region has no UNIX locale (en_CL), where iTerm2 stops on a dialog."""
+    try:
+        region = iterm2_defaults(("read", "-g", "AppleLocale")).strip()
+    except CommandError:
+        return False
+    return bool(region) and not (root / f"{region}.UTF-8").exists()
 
 
 def iterm2_proof(text: str) -> bool:

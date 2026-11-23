@@ -9,7 +9,7 @@ import itertools
 import os
 import re
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -37,6 +37,8 @@ WEZTERM_UNVERIFIED: Final = "wezterm: could not verify the keys against wezterm 
 _WEZTERM_KEYS_ASSIGNMENT = re.compile(
     r"^\s*config\.keys\s*=(?!=)(?!\s*config\.keys\s+or\b)(?!\s*config\.keys\s+or\s*\{)"
 )
+_WEZTERM_ENTRY_KEY = re.compile(r"""\bkey\s*=\s*(['"])([^'"]+)\1""")
+_WEZTERM_ENTRY_MODS = re.compile(r"""\bmods\s*=\s*(['"])([^'"]*)\1""")
 _WEZTERM_ENTRY = re.compile(
     r"^\s*\{\s*key\s*=\s*'([^']+)'\s*,\s*mods\s*=\s*'([^']*)'\s*,\s*action\s*=\s*(.*?)\s*\},?\s*$"
 )
@@ -134,15 +136,61 @@ def wezterm_chord(key: str, mods: str) -> str:
     return f"{key.lower()}/{'|'.join(sorted(names))}"
 
 
-def wezterm_readback(output: str, rows: Sequence[tuple[str, str, str]]) -> tuple[str, ...]:
+def wezterm_display(key: str, mods: str) -> str:
+    return f"{mods.replace('OPT', 'ALT').replace('|', '+')}+{key}"
+
+
+def wezterm_disabled_chords(
+    text: str, rows: Sequence[tuple[str, str, str]]
+) -> tuple[tuple[str, str], ...]:
+    """The installer chords the user's own config disables with DisableDefaultAssignment.
+
+    Each item is (chord, report line). The scan reads one-line Lua key entries outside the
+    installer's region; it is a line scan with linear patterns and never writes anything.
+    """
+    begin = marker(WEZTERM_KEYS, ">>>", comment="--")
+    end = marker(WEZTERM_KEYS, "<<<", comment="--")
+    ours = {wezterm_chord(key, mods): wezterm_display(key, mods) for key, mods, _ in rows}
+    found: dict[str, str] = {}
+    inside = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == begin:
+            inside = True
+        elif stripped == end:
+            inside = False
+        elif inside or stripped.startswith("--") or "DisableDefaultAssignment" not in line:
+            continue
+        else:
+            key, mods = _WEZTERM_ENTRY_KEY.search(line), _WEZTERM_ENTRY_MODS.search(line)
+            if key is None or mods is None:
+                continue
+            chord = wezterm_chord(key.group(2), mods.group(2))
+            if chord in ours and chord not in found:
+                found[chord] = (
+                    f"wezterm: partial: your config disables {ours[chord]} "
+                    "(DisableDefaultAssignment); kept yours"
+                )
+    return tuple(found.items())
+
+
+def wezterm_readback(
+    output: str, rows: Sequence[tuple[str, str, str]], reported: Collection[str] = ()
+) -> tuple[str, ...]:
+    """Lines for a chord wezterm show-keys lists with another action, disabled, or not at all.
+
+    `reported` holds chords the static config scan already named. A failed command or output
+    with no keys section cannot be judged and yields WEZTERM_UNVERIFIED.
+    """
     actions: dict[str, str] = {}
     expected_chords = {wezterm_chord(key, mods.replace("OPT", "ALT")) for key, mods, _ in rows}
     in_keys = False
+    listed = False
     for line in output.splitlines():
         if line.strip().startswith("key_tables"):
             break
         if line.strip().startswith("keys = {"):
-            in_keys = True
+            in_keys = listed = True
         elif in_keys:
             match = _WEZTERM_ENTRY.match(line)
             if match:
@@ -150,23 +198,33 @@ def wezterm_readback(output: str, rows: Sequence[tuple[str, str, str]]) -> tuple
                 chord = wezterm_chord(key, mods)
                 if chord in expected_chords:
                     actions[chord] = action
-    conflicts: list[str] = []
-    missing = any(wezterm_chord(key, mods) not in actions for key, mods, _ in rows)
+    if not listed:
+        return (WEZTERM_UNVERIFIED,)
+    lines: list[str] = []
     for key, mods, send in rows:
         chord = wezterm_chord(key, mods)
-        expected_chord = wezterm_chord(key, mods.replace("OPT", "ALT"))
+        if chord in reported:
+            continue
+        display = wezterm_display(key, mods)
         expected = {
             "\x0c": "act.SendString '\\f'",
             "\x1bb": "act.SendString '\\u{1b}b'",
             "\x1bf": "act.SendString '\\u{1b}f'",
         }.get(send)
-        action = actions.get(chord) or actions.get(expected_chord)
+        action = actions.get(chord)
         if action is None:
-            missing = True
+            lines.append(
+                f"wezterm: partial: wezterm show-keys does not list {display}; "
+                "your config removes it"
+            )
+        elif "DisableDefaultAssignment" in action:
+            lines.append(
+                f"wezterm: partial: wezterm show-keys lists {display} as "
+                "DisableDefaultAssignment; your config disables it; kept yours"
+            )
         elif action != expected and expected is not None:
-            display_mods = mods.replace("OPT", "ALT").replace("|", "+")
-            conflicts.append(f"wezterm: partial: you already bind {display_mods}+{key}; kept yours")
-    return (*conflicts, *((WEZTERM_UNVERIFIED,) if missing else ()))
+            lines.append(f"wezterm: partial: you already bind {display}; kept yours")
+    return tuple(lines)
 
 
 def marker(terminal: str, edge: str, *, comment: str = "#") -> str:
